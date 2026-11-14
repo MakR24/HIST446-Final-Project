@@ -1,0 +1,29 @@
+.Rproj.user/
+.Rhistory
+.RData
+.Ruserdata
+.Renviron
+/.quarto/
+*_files/
+.DS_Store
+
+# Anglin: Freedom on the Move and datasets built from its transcriptions
+data/anglin/FOTM/
+data/anglin/derived/
+# Cole: HathiTrust download
+data/cole/raw/
+data/cole/pages/
+# Huneryager: catalog PDFs
+data/huneryager/catalogs/
+data/huneryager/catalog-lines.csv
+# Matney: page images and raw API batches
+data/matney/images/
+data/matney/batches/
+# Rojas: IPUMS can't be redistributed
+data/rojas/ipums/
+# Tan: private notes
+private/
+# Tanglertpaibul: photos
+data/tanglertpaibul/HEIC/
+*.heic
+*.HEIC
