@@ -1,0 +1,951 @@
+---
+title: "HIST 446 The Past as Data: Final Project Workspace"
+subtitle: "Student: Asante Anglin"
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    code-copy: true
+    embed-resources: true
+execute:
+  warning: false
+  cache: false
+---
+
+## Getting Started (November 11, 2026)
+
+Asante,
+
+You did your Close Reading on Codd's relational model. Freedom on the Move (FOTM) is a relational database, and this workspace treats it like one. Your project asks about freedom seekers who tried to **pass** as free, or as white. Here, the question becomes: **what can FOTM's structure (its tables, keys, fields, and gaps) tell us about those freedom seekers, and what does it hide?**
+
+You'll work with ads printed in **South Carolina newspapers, 1800–1860**, and you'll keep two layers of data apart all the way through: **the ad's text**, written by an enslaver or a jailer to get a person back, and **the markup**, the fields that volunteers filled in about that ad in the 2010s and 2020s. By the time you push this back to GitHub, you will have:
+
+1.  **A map of FOTM's tables and keys**, with code that checks how they connect.
+2.  **A data-quality profile of the South Carolina ads**: how many are transcribed, how full each field is, how many are reprints, and how often two volunteers who marked up the same ad agreed.
+3.  **A text search for passing**, checked against the volunteers' `profess_freedom` field and against your own reading of a sample of ads.
+4.  **A profile of the people in passing ads**, compared with everyone else: gender, age, literacy, aliases, group escapes, and color words.
+5.  **A state-by-state comparison**, which tests two claims from your sources.
+
+Read the explanation before you run each chunk. The steps run in order, so each chunk needs the ones before it.
+
+### Your sources
+
+| Source | What it is for |
+|--------------------------|----------------------------------------------|
+| Freedom on the Move, Full Database Download | Your data: the CSV files from Exercise 3, in your `HIST446-Worksheets/data/FOTM/` folder |
+| Jessica Marie Johnson, "Markup Bodies" (2018), on Canvas | How a database re-describes the people in its sources. Your guide to the markup layer. |
+| Amani Marshall (2010), *Slavery & Abolition* | Claim to test: South Carolina ads describe people passing **as free** |
+| Martha J. Cutter, "'As White as Most White Women': Racial Passing in Advertisements for Runaway Slaves and the Origins of a Multivalent Term," *American Studies* 54, no. 4 (2015): 73–97 | Claim to test: runaway ads describe people passing **as white** |
+
+::: callout-warning
+## Harmful language
+
+These ads use the enslavers' racial vocabulary, and so do some of FOTM's fields. As in Exercise 3, quote it only as evidence, in quotation marks, and say whose words they are. The rows in these tables are people.
+:::
+
+## 0. Your project folders
+
+Your work lives in two folders named after you:
+
+- **`data/anglin/`** holds your datasets: the sources you download, and every dataset this workspace makes from them (cleaned, processed, counted).
+- **`output/anglin/`** holds the things you make to show: charts, maps, and your writing.
+
+```         
+HIST446-Final-Project/
+├── HIST446-Final-Project.Rproj ← open this first
+├── README.md                   ← how to get, update and commit the repository
+├── .gitignore                  ← one file for the whole class: don't edit it
+├── Anglin_Workspace.qmd        ← this file
+├── ...                         ← your classmates' workspaces
+├── data/
+│   └── anglin/                 ← your datasets: sources, and everything made from them
+│       ├── FOTM/               ← copy of your FOTM download
+│       ├── derived/            ← your South Carolina dataset
+│       └── *.csv               ← your counts and your validation sheet
+└── output/
+    └── anglin/                 ← your charts, maps and writing
+```
+
+If you haven't yet, place a **copy** (don't move files) of the whole `data/FOTM/` folder from `HIST446-Worksheets/` into `data/anglin/`. Or, you can go to database.freedomonthemove.org and download the full database again into `data/anglin/FOTM/`.
+
+### What stays off GitHub
+
+As in Exercise 3, FOTM's data never goes on GitHub. That includes your own datasets made from it, since they carry the ads' transcriptions. The `.gitignore` already keeps `data/anglin/FOTM/` and `data/anglin/derived/` off GitHub. Remember not to edit the `.gitignore`.
+
+### What to commit
+
+Commit this `.qmd` file, the CSV files in `data/anglin/`, and everything in `output/anglin/`. The CSV files hold counts and your notes, not FOTM's transcriptions, and they document your method, which is part of your Reproducibility grade.
+
+## 1. One-time installation
+
+You only need to run this chunk once. It is set to `eval: false` so it won't run every time you render the document.
+
+```{r}
+#| label: install
+#| eval: false
+
+install.packages(c(
+  "readr",     # reading and writing CSV files
+  "dplyr", "tidyr", "stringr",  # data wrangling
+  "ggplot2",   # charts
+  "tidytext"   # splitting text into words
+))
+```
+
+## 2. Load packages and settings
+
+If you're returning to this file at a later time, start here.
+
+```{r}
+#| label: setup
+
+library(readr)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(ggplot2)
+library(tidytext)
+
+# ---- settings ----
+my_state   <- "US-SC"   # FOTM writes states like this: "US-SC", "US-GA", "US-VA"
+start_year <- 1800
+end_year   <- 1860
+
+datadir     <- "data/anglin" # your datasets (CSV files are committed)
+fotm_dir    <- file.path(datadir, "FOTM") # the FOTM download (not committed)
+derived_dir <- file.path(datadir, "derived") # datasets made from FOTM (not committed)
+outdir      <- "output/anglin" # your charts and writing
+
+# FOTM's ways of saying "nothing here" (from Exercise 3)
+empty_values <- c("{undefined value}", "NOT_PROVIDED", "-9")
+
+dir.create(derived_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(outdir,      recursive = TRUE, showWarnings = FALSE)
+```
+
+## 3. Load the FOTM tables
+
+This is the `read_fotm()` function from Exercise 3, with one change: the step that tidies column names is now its own small function, `clean_name()`, so you can read what it does. Remember the trailing comma at the end of every FOTM header line: `read_fotm()` drops the empty column it creates.
+
+```{r}
+#| label: read-fotm
+
+clean_name <- function(name) {
+  name %>%
+    str_remove("^\\S+ ") %>% # "RUNAWAY ID" becomes "ID"
+    str_to_lower() # "ID" becomes "id"
+}
+
+read_fotm <- function(table) {
+  file <- str_glue("{fotm_dir}/{table}.csv")
+  suppressWarnings(
+    read_csv(file,
+             col_types = cols(.default = col_character()),  
+             # read everything as text
+             name_repair = "unique_quiet")
+  ) %>%
+    select(-starts_with("...")) %>%   
+    # drop the empty column the trailing comma creates
+    rename_with(clean_name)
+}
+```
+
+Load the seven tables you need:
+
+```{r}
+#| label: load-tables
+
+ads             <- read_fotm("advertisement")         # one row per printed ad
+events          <- read_fotm("runaway_event")         # one row per escape, as one volunteer marked it up
+runaways        <- read_fotm("runaway")               # one row per person in one event
+enslaved_people <- read_fotm("enslaved_person")       # gender, birth years, literacy
+people_names    <- read_fotm("enslaved_person_name")  # one row per name, including aliases
+newspapers      <- read_fotm("newspaper")             # one row per newspaper
+locations       <- read_fotm("location")              # one row per place
+```
+
+## 4. Map the database
+
+Here is how these tables connect. Each arrow points from a table to the table it references through a **foreign key**.
+
+```         
+locations <- location_id <- newspapers <- newspaper_id  <-  ads
+                                                             ^
+                                                             |
+                                                    advertisement_id
+                                                             ^
+                                                             |
+                                                          events
+                                                             ^
+                                                             |
+                                                     runaway_event_id
+                                                             ^
+                                                             │
+enslaved_people <---- enslaved_person_id -----------------> runaways
+       ^
+       |
+enslaved_person_id
+       ^
+       |
+people_names
+```
+
+But is this really how they connect? The function below takes a column of foreign keys and counts how many rows share each key: for example, how many events point to the same ad.
+
+```{r}
+#| label: rows-per-key
+
+rows_per_key <- function(keys) {
+  tibble(key = keys) %>%
+    count(key, name = "rows") %>%  # rows for each key
+    count(rows, name = "keys") %>% # how many keys have 1 row, 2 rows, ...
+    mutate(description = as.character(paste0("how many ")))
+}
+
+rows_per_key(events$advertisement_id)        # events per ad
+rows_per_key(runaways$runaway_event_id)      # people per event
+rows_per_key(runaways$enslaved_person_id)    # runaway records per person
+rows_per_key(people_names$enslaved_person_id) # names per person
+```
+
+Now check **referential integrity**: does every foreign key point to a row that exists? And how many ads have no events at all?
+
+```{r}
+#| label: integrity
+
+sum(!(runaways$runaway_event_id %in% events$id)) 
+    # people whose event is missing
+sum(!(events$advertisement_id %in% ads$id)) 
+    # events whose ad is missing
+sum(!(runaways$enslaved_person_id %in% enslaved_people$id))  
+    # people with no person record
+sum(!(ads$id %in% events$advertisement_id)) 
+    # ads nobody has marked up yet
+```
+
+### Take notes
+
+Answer the questions below and take notes of what you find. They are findings about the data.
+
+1.  Some ads have two or more events. An event is one escape. Why might one ad have several? Hint: The project relies on crowd sourcing, and anyone can markup the advertisements so it becomes a row in the database. Think about what happens when the same escape event is entered or marked up twice.
+
+> 
+
+2.  Every runaway record has its **own** `enslaved_person_id`: the relationship is one-to-one. So if the same woman was advertised in 1824 and again in 1826, FOTM holds two "people." What does that mean for counting people, or following one person's attempts to escape?
+
+> 
+
+3.  Most ads have no events. What does that tell you about the completeness of the database and Freedom on the Move as a project?
+
+> 
+
+::: callout-note
+Two more things you should know about the data
+
+- missing dates are stored as 1970-01-01 in FOTM. That's a computer's "time zero".
+- `RUNAWAY_EVENT_TYPE` is empty in every row, so you can't use this varialbe in your analysis.
+:::
+
+## 5. Build the South Carolina dataset
+
+An ad doesn't record its state. The **newspaper** where the ad was published does, through `locations`. Make a small newspapers table with city and state:
+
+```{r}
+#| label: papers
+
+papers <- newspapers %>%
+  select(newspaper_id = id, newspaper = name, location_id) %>%
+  left_join(locations %>% select(location_id = id, city, state),
+            by = "location_id")
+
+write_csv(papers, file.path(derived_dir, "newspapers.csv"))
+
+head(papers)
+```
+
+Now add each ad's newspaper and state, and a few columns you'll use throughout:
+
+- `year` and `decade`, from `publication_date`
+- `has_text`: TRUE if a volunteer has transcribed the ad
+- `text`: the transcription in lower case, which makes searching easier
+- `marked_up`: TRUE if the ad has at least one event
+- `fingerprint`: the first 80 letters of the ad, with spaces, numbers, and punctuation removed. You'll use it to find reprints in Section 6.
+
+```{r}
+#| label: all-ads
+
+all_ads <- ads %>%
+  left_join(papers, by = "newspaper_id") %>%
+  mutate(
+    year        = as.integer(str_sub(publication_date, 1, 4)),
+    decade      = year %/% 10 * 10,
+    has_text    = !is.na(transcription) &
+                  !(transcription %in% empty_values) &
+                  str_length(transcription) > 20,
+    text        = str_to_lower(transcription),
+    marked_up   = id %in% events$advertisement_id,
+    fingerprint = str_sub(str_remove_all(text, "[^a-z]"), 1, 80)
+  )
+
+write_csv(all_ads, file.path(derived_dir, "all-ads.csv"))
+
+head(all_ads)
+```
+
+Now filter to pre-Civil War South Carolina only.
+
+```{r}
+sc_ads <- all_ads %>%
+  filter(state == my_state, year >= start_year, year <= end_year)
+
+head(sc_ads)
+
+```
+
+Count your `n`s.
+
+```{r}
+nrow(sc_ads)
+sc_ads %>% count(city, sort = TRUE)
+```
+
+## 6. Profile the data quality
+
+### Coverage: how much is readable?
+
+```{r}
+#| label: coverage
+
+coverage <- sc_ads %>%
+  group_by(decade) %>%
+  summarize(ads         = n(),
+            transcribed = sum(has_text),
+            marked_up   = sum(marked_up))
+
+write_csv(coverage, file.path(datadir, "coverage-by-decade.csv"))
+
+coverage
+```
+
+::: callout-warning
+### Read this table carefully
+
+On the FOTM download from September 2026, there were about 11,600 South Carolina ads for 1800–1860, but only about 2,200 had transcriptions, and **almost all of those were from Charleston papers in the 1820s and 1830s**. The 1850s had about 3,000 ads and only about 30 transcriptions.
+
+So everything below that uses the ads' text really describes **Charleston, 1820s–1830s**. The untranscribed ads aren't missing at random: they're wherever volunteers haven't worked yet. You can't use these counts to say whether anything rose or fell over time.
+:::
+
+Keep only the transcribed ads:
+
+```{r}
+#| label: sc-texts
+
+sc_texts <- sc_ads %>% filter(has_text)
+nrow(sc_texts)
+```
+
+### Reprints
+
+Enslavers paid to run the same ad for weeks, and FOTM records **each printing** as its own ad which is later transcribed separately. Transcriptions of the same ad vary a little in accuracy ("ranaway" vs. "runaway"), so identical transcriptions are rare. The `fingerprint` is a rough fix: printings of the same ad often start with the same 80 letters.
+
+```{r}
+#| label: reprints
+
+nrow(sc_texts)   # printings
+n_distinct(sc_texts$transcription)  # distinct transcriptions
+n_distinct(sc_texts$fingerprint)     # distinct fingerprints (roughly: ads)
+
+sc_texts %>% count(fingerprint, sort = TRUE) %>% head(5)
+```
+
+Spot-check the fingerprint: take the most common one and read the first lines of its printings.
+
+```{r}
+#| label: fingerprint-check
+
+top_fingerprint <- sc_texts %>% # find the most copied ad text
+  count(fingerprint, sort = TRUE) %>% #one row per fingerprint and its count
+  slice(1) %>% pull(fingerprint) # keep only the top row
+
+sc_texts %>% 
+  filter(fingerprint == top_fingerprint) %>% 
+  # only copies of the top text
+  mutate(first_line = str_squish(str_sub(transcription, 1, 160)), 
+  # new column with first 160 characters of text, turn line breaks into spaces
+         row_text = paste(publication_date, newspaper, first_line, sep = " | ")) %>%  
+  # new column with first 160 characters plus date and paper
+  arrange(desc(publication_date)) %>% 
+  # arrange by publication date
+  pull(row_text) %>% 
+  # take values as plain text
+  writeLines() # print each one on its own line 
+```
+
+Now take note: Are they all the same ad, in the same newspaper, a few days or weeks apart?
+
+> 
+
+The fingerprint can fail both ways: two different ads that open with the same formula ("Twenty dollars reward. Ranaway from the subscriber...") could share one fingerprint. Another failure is when a small difference in the first line ("ranaway" vs. "runaway," "2d" vs. "2nd") splits one ad in two. The second kind is more common, so treat counts based on the fingerprint as a ceiling. From here on, **count with `unique_ads`** (one printing per fingerprint) and **read with `sc_texts`**:
+
+```{r}
+#| label: unique-ads
+
+unique_ads <- sc_texts %>% distinct(fingerprint, .keep_all = TRUE)
+nrow(unique_ads)
+```
+
+### Fill rates: what did volunteers record?
+
+This is the `fill_rates()` function from Data Exercise 3, "Markup Bodies". Run it on the people in South Carolina's transcribed ads:
+
+```{r}
+#| label: fill-rates
+
+fill_rates <- function(table) {
+  table %>%
+    pivot_longer(everything(), names_to = "field", values_to = "value") %>%
+    mutate(recorded = !is.na(value) & !(value %in% empty_values)) %>%
+    group_by(field) %>%
+    summarize(percent_recorded = round(100 * mean(recorded), 1)) %>%
+    arrange(desc(percent_recorded))
+}
+
+sc_people_raw <- runaways %>%
+  left_join(events %>% select(id, advertisement_id), by = c("runaway_event_id" = "id")) %>%
+  filter(advertisement_id %in% sc_texts$id)
+
+sc_people_raw %>%
+  select(-id, -runaway_event_id, -enslaved_person_id, -advertisement_id, -visible) %>%
+  fill_rates()
+```
+
+A low fill rate can mean two different things: the ad didn't say, or the volunteer didn't record it. Exercise 3 showed you that FOTM's different empty values partly tell these apart.
+
+### Repeated markup: do volunteers agree?
+
+Some ads have two or more events because **more than one volunteer marked up the same ad**. That gives you something rare in historical data: a way to measure how consistent the markup is. For every ad with two or more markups, compare the set of racial terms each volunteer recorded. This uses the whole database, to get enough cases.
+
+```{r}
+#| label: volunteer-agreement
+
+markup_terms <- runaways %>%
+  left_join(events %>% select(id, advertisement_id), by = c("runaway_event_id" = "id")) %>%
+  select(advertisement_id, runaway_event_id, racial_description) %>%
+  separate_longer_delim(racial_description, delim = ",") %>%
+  mutate(term = str_squish(str_to_lower(racial_description))) %>%
+  filter(!(term %in% str_to_lower(empty_values)), term != "")
+
+# one row per markup: its terms, sorted and pasted together
+markup_sets <- markup_terms %>%
+  distinct(advertisement_id, runaway_event_id, term) %>%
+  arrange(term) %>%
+  group_by(advertisement_id, runaway_event_id) %>%
+  summarize(terms = paste(term, collapse = ", "), .groups = "drop")
+
+# ads with two or more markups: do all of them have the same terms?
+agreement <- markup_sets %>%
+  group_by(advertisement_id) %>%
+  filter(n() >= 2) %>%
+  summarize(markups = n(), versions = n_distinct(terms)) %>%
+  mutate(agree = versions == 1)
+
+agreement %>% count(agree)
+```
+
+Look at a few disagreements:
+
+```{r}
+#| label: disagreements
+
+disagree_ids <- agreement %>% filter(!agree) %>% slice(1:10) %>% pull(advertisement_id)
+
+markup_sets %>%
+  filter(advertisement_id %in% disagree_ids) %>%
+  select(-runaway_event_id) %>%
+  arrange(advertisement_id)
+```
+
+::: callout-tip
+### Hint
+
+You can use the `advertisement_id` to pull up the ad in the database. In your browser, type:
+
+database.freedomonthemove.org/advertisements/\[advertisement_id here\]
+:::
+
+What kinds of disagreement do you see: a missing term, a different word for the same thing, or a real difference in judgment? If volunteers disagree this often on ads they both read, what does that tell you about `racial_description` as a variable? This is a way to measure Jessica Marie Johnson's "markup bodies" argument. In your final project, you might want to discuss this in more detail while connecting it back to Johnson's article.
+
+> 
+
+## 7. Search for "passing"
+
+Let's search the ads' text. Each search is a **regular expression** (regex). For example, `pass(es|ed|ing)? (himself |herself )?(for|as) (a )?free` matches "pass for free," "passes himself as free," and "pass as a free man":
+
+- `(es|ed|ing)?` means: one of these endings, or none
+- `(himself |herself )?` means: one of these words, or none
+- `(for|as)` means: "for" or "as"
+
+Source: Claude Opus 5.5.
+
+Free papers and passes were the documents a Black person could be asked to show, so ads mention them when they expect someone to pass as free.
+
+```{r}
+#| label: patterns
+
+passing_patterns <- c(
+  pass_as_free  = "pass(es|ed|ing)? (himself |herself |themselves )?(for|as) (a )?free",
+  pass_as_white = "pass(es|ed|ing)? (himself |herself |themselves )?(for|as) (a )?white",
+  free_papers   = "free papers?|free pass|forged pass|false pass|papers of freedom|certificate of (his|her) freedom|forged papers?",
+  says_free     = "(says|said|claims|pretends)( that)? (he|she) (is|was) free|calls? (himself|herself) free|(claims|pretends) to be free"
+)
+```
+
+The function below adds one TRUE/FALSE column for each pattern, plus `any_passing`, which is TRUE if any of them matched. You'll use it again in Section 9, on every state.
+
+```{r}
+#| label: flag-function
+
+flag_passing <- function(some_ads) {
+  for (pattern_name in names(passing_patterns)) {
+    some_ads[[pattern_name]] <- str_detect(some_ads$text, passing_patterns[[pattern_name]])
+  }
+  some_ads %>%
+    mutate(any_passing = pass_as_free | pass_as_white | free_papers | says_free,
+           passing_group = if_else(any_passing, "Passing ads", "All other ads"))
+}
+
+sc_texts   <- flag_passing(sc_texts)
+unique_ads <- flag_passing(unique_ads)
+
+unique_ads %>%
+  summarize(ads           = n(),
+            pass_as_free  = sum(pass_as_free),
+            pass_as_white = sum(pass_as_white),
+            free_papers   = sum(free_papers),
+            says_free     = sum(says_free),
+            any_passing   = sum(any_passing))
+```
+
+Save your dataset so you can come back to it without rebuilding it. It goes in `data/anglin/derived/`, which Git ignores.
+
+```{r}
+#| label: save-sc-texts
+
+sc_texts %>%
+  select(-text) %>%
+  write_csv(file.path(derived_dir, "sc-ads.csv"))
+```
+
+### Compare the search with the markup
+
+FOTM's `profess_freedom` field records whether a volunteer marked the person as **claiming to be free**. Treat this field and your own search as two classifiers of the same ads, and cross-tabulate them:
+
+```{r}
+#| label: search-vs-markup
+
+sc_people_raw %>%
+  left_join(sc_texts %>% select(id, any_passing), by = c("advertisement_id" = "id")) %>%
+  count(profess_freedom, any_passing)
+```
+
+Most people have `{undefined value}`: the volunteer never answered the question. Among those with `true` or `false`, where do the two classifiers disagree?
+
+> 
+
+### Validate the search by reading
+
+The only ground truth here is reading the ads. The chunk below draws a random sample of 10 ads the search flagged and 10 it didn't, and creates `data/anglin/validation.csv`, a sheet for your judgments. It only creates the sheet once, so your answers are never overwritten.
+
+```{r}
+#| label: validation-sample
+
+set.seed(446)
+validation_sample <- bind_rows(
+  unique_ads %>% filter(any_passing)  %>% slice_sample(n = 10),
+  unique_ads %>% filter(!any_passing) %>% slice_sample(n = 10)
+)
+
+validation_file <- file.path(datadir, "validation.csv")
+
+if (!file.exists(validation_file)) {
+  validation_sample %>%
+    transmute(id, search_says_passing = any_passing,
+              really_about_passing = NA,   # fill in TRUE or FALSE
+              notes = "") %>%              # what the ad reveals: plans, skills, papers, dress
+    write_csv(validation_file)
+}
+```
+
+Print the ads to read them. This also saves the ads as a text file, `data/anglin/derived/for-validation.txt`.
+
+```{r}
+#| label: read-sample
+
+for (i in seq_len(nrow(validation_sample))) {
+  one_ad <- paste0("\n==========", validation_sample$id[i], "|",
+                   validation_sample$publication_date[i],
+                   "| search says:", validation_sample$any_passing[i],
+                   "==========\n\n",
+                   validation_sample$transcription[i], "\n")
+  cat(one_ad)
+  text_output <- c(text_output, one_ad)
+}
+
+writeLines(text_output, file.path(derived_dir, "for-validation.txt"))
+
+writeLines(text_output)
+```
+
+Close read each advertisement. Open `data/anglin/validation.csv` (in RStudio or in Excel) and fill in `really_about_passing` with TRUE or FALSE for each ad. Also fill in `notes` with any observations you may have for each ad. Save the file when you're done. Then run this chunk to score the search:
+
+```{r}
+#| label: score-search
+
+validation <- read_csv(validation_file, show_col_types = FALSE)
+
+if (all(is.na(validation$really_about_passing))) {
+  message("Fill in really_about_passing in data/anglin/validation.csv first.")
+} else {
+  validation %>% count(search_says_passing, really_about_passing)
+}
+```
+
+The flagged ads that are really about passing give you the search's **precision**. Unflagged ads that turn out to be about passing are **misses**, and they tell you which pattern to add.
+
+::: callout-tip
+## Suggestion
+
+- You could add a pattern for the paperwork of employment (for example `badge = "badge|ticket"`) to `passing_patterns`. and to `any_passing` in `flag_passing()`. Then observe: How many ads change group from "all other ads" to "passing ads" or vice-versa?
+- A regex can miss things (OCR errors, unusual spellings) and catch things it shouldn't. If you find false matches while validating, take note of them.
+:::
+
+## 8. Who do the passing ads describe?
+
+Now build a **person-level** table to compare the people in passing ads with everyone else. Two choices keep it from double-counting:
+
+- one printing per ad (the ads in `unique_ads`)
+- one volunteer's markup per ad (the first event for each ad)
+
+```{r}
+#| label: sc-people
+
+one_markup_per_ad <- events %>% distinct(advertisement_id, .keep_all = TRUE)
+
+aliases <- people_names %>%
+  filter(is_alias == "true") %>%
+  distinct(enslaved_person_id) %>%
+  mutate(has_alias = TRUE)
+
+sc_people <- runaways %>%
+  inner_join(one_markup_per_ad %>% select(id, advertisement_id, escapee_count),
+             by = c("runaway_event_id" = "id")) %>%
+  inner_join(unique_ads %>% select(advertisement_id = id, passing_group),
+             by = "advertisement_id") %>%
+  left_join(enslaved_people %>% select(enslaved_person_id = id, gender, literacy),
+            by = "enslaved_person_id") %>%
+  left_join(aliases, by = "enslaved_person_id") %>%
+  mutate(
+    age        = as.numeric(if_else(min_age %in% empty_values, NA, min_age)),  # empty values become NA
+    has_alias  = !is.na(has_alias),
+    female     = gender == "FEMALE",
+    literate   = literacy %in% c("read", "write", "both"),
+    in_group   = as.numeric(escapee_count) > 1
+  )
+
+nrow(sc_people)
+```
+
+Compare the two groups:
+
+```{r}
+#| label: people-profile
+
+people_profile <- sc_people %>%
+  group_by(passing_group) %>%
+  summarize(people          = n(),
+            percent_female  = round(100 * mean(female, na.rm = TRUE), 1),
+            median_age      = median(age, na.rm = TRUE),
+            percent_literate = round(100 * mean(literate), 1),
+            percent_alias   = round(100 * mean(has_alias), 1),
+            percent_in_group = round(100 * mean(in_group, na.rm = TRUE), 1))
+
+write_csv(people_profile, file.path(datadir, "people-profile.csv"))
+people_profile
+```
+
+::: callout-warning
+## Careful with "literate"
+
+`literacy` is mostly `NOT_PROVIDED`. Here, `literate` is TRUE only when a volunteer recorded that the ad says the person could read or write. So `percent_literate` means "percent whose ad mentions literacy," not "percent who could read."
+:::
+
+### Color words: what the enslavers wrote
+
+Cutter's claim leads you to expect light-skin descriptions in passing ads. Test it on the text, not the markup. The loop takes one word at a time and counts the ads that use it in each group. The `\\b` around each word means "whole word only," so "black" doesn't match "blacksmith."
+
+```{r}
+#| label: color-words
+
+color_words <- c("negro", "black", "dark", "mulatto", "yellow", "bright",
+                 "light", "complexion", "mustee", "indian", "white")
+
+color_counts <- tibble()
+
+for (word in color_words) {
+  unique_ads$uses_word <- str_detect(unique_ads$text, str_glue("\\b{word}\\b"))
+  this_word <- unique_ads %>%
+    group_by(passing_group) %>%
+    summarize(word = word,
+              ads = n(),
+              ads_with_word = sum(uses_word))
+  color_counts <- bind_rows(color_counts, this_word)
+}
+unique_ads$uses_word <- NULL   # remove the helper column
+
+color_counts <- color_counts %>%
+  mutate(percent = round(100 * ads_with_word / ads, 1))
+
+write_csv(color_counts, file.path(datadir, "color-words-by-group.csv"))
+```
+
+```{r}
+#| label: color-chart
+#| fig-width: 8
+#| fig-height: 5
+
+color_counts %>%
+  ggplot(aes(x = percent, y = reorder(word, percent), fill = passing_group)) +
+  geom_col(position = "dodge") +
+  labs(title = "Color words in South Carolina runaway ads",
+       subtitle = str_glue("One printing per ad, {start_year}–{end_year}"),
+       x = "Percent of ads that use the word", y = NULL, fill = NULL) +
+  theme_minimal()
+```
+
+::: callout-warning
+## Small numbers
+
+There are only about 50 passing ads, so one or two ads can move a percentage a lot. And "white" is a trap: most ads say "white" about someone else ("a white man," "white pantaloons"). Check it with `keyword_in_context()` below before you trust it.
+:::
+
+To see what a word is doing, read it in context. This function returns the text around every match of a pattern:
+
+```{r}
+#| label: kwic
+
+keyword_in_context <- function(some_ads, pattern, window = 80) {
+  results <- tibble(id = character(), publication_date = character(), context = character())
+
+  for (i in seq_len(nrow(some_ads))) {
+    text <- some_ads$text[i]
+    positions <- str_locate_all(text, pattern)[[1]]
+    for (j in seq_len(nrow(positions))) {
+      start <- max(1, positions[j, "start"] - window)
+      end   <- min(str_length(text), positions[j, "end"] + window)
+      results <- bind_rows(results, tibble(id = some_ads$id[i],
+                                           publication_date = some_ads$publication_date[i],
+                                           context = str_squish(str_sub(text, start, end))))
+    }
+  }
+  results
+}
+
+keyword_in_context(unique_ads %>% filter(any_passing), "\\bwhite\\b") %>% pull(context)
+```
+
+### Take note
+
+ From reading the word "white" in context, can you find a common pattern of usage?
+ 
+ > 
+
+## 9. Compare the states: test Marshall and Cutter
+
+Marshall studied South Carolina and wrote about passing **as free**. Cutter collected ads from across the country and wrote about passing **as white**. Run the same search on every state's transcribed ads in the same years, one printing per ad:
+
+```{r}
+#| label: all-states
+
+all_texts <- all_ads %>%
+  filter(has_text, !is.na(state), year >= start_year, year <= end_year) %>%
+  distinct(fingerprint, .keep_all = TRUE) %>%
+  flag_passing()
+
+by_state <- all_texts %>%
+  group_by(state) %>%
+  summarize(ads           = n(),
+            pass_as_free  = sum(pass_as_free),
+            pass_as_white = sum(pass_as_white)) %>%
+  filter(ads >= 300) %>%   # leave out states with too few transcribed ads
+  mutate(free_per_100  = round(100 * pass_as_free / ads, 2),
+         white_per_100 = round(100 * pass_as_white / ads, 2)) %>%
+  arrange(desc(ads))
+
+write_csv(by_state, file.path(datadir, "passing-by-state.csv"))
+
+by_state
+```
+
+```{r}
+#| label: state-chart
+#| fig-width: 8
+#| fig-height: 5
+
+by_state %>%
+  pivot_longer(c(free_per_100, white_per_100),
+               names_to = "kind", values_to = "per_100_ads") %>%
+  mutate(kind = if_else(kind == "free_per_100", "pass as free", "pass as white")) %>%
+  ggplot(aes(x = per_100_ads, y = reorder(state, per_100_ads), fill = kind)) +
+  geom_col(position = "dodge") +
+  labs(title = "How often ads say a person will pass as free or as white",
+       subtitle = str_glue("Transcribed ads, {start_year}–{end_year}, states with 300+ ads"),
+       x = "Ads per 100", y = NULL, fill = NULL) +
+  theme_minimal()
+```
+
+Now the markup layer. Where are the people who volunteers tagged as `white passing`?
+
+```{r}
+#| label: white-passing-by-state
+
+runaways %>%
+  filter(str_detect(racial_description, "white passing")) %>%
+  left_join(events %>% select(id, advertisement_id), by = c("runaway_event_id" = "id")) %>%
+  left_join(all_ads %>% select(id, state), by = c("advertisement_id" = "id")) %>%
+  count(state, sort = TRUE)
+```
+Do the text and the markup tell the same story about where people passed as white? Use these numbers to say where Marshall's and Cutter's claims hold, and remember the coverage problem: a state's numbers only describe the years and papers volunteers have transcribed.
+
+>
+
+## 10. Check your work
+
+Before you use this data in your project:
+
+- [ ] Check that you can say, in one sentence, which years and newspapers your text results really describe.
+- [ ] Check that your `white passing` count for the whole database (EDA below) matches Exercise 3: 133, if you're using the same download.
+- [ ] Check that the printings that share the most common fingerprint are really the same ad.
+- [ ] **Validation.** Check that `data/anglin/validation.csv` is filled in.
+- [ ] **Commit** this `.qmd` file, the CSV files in `data/anglin/`, and everything in `output/anglin/` are committed. `data/anglin/FOTM/` and `data/anglin/derived/` are not.
+
+### Thinking about the data (and the people in it)
+
+Every choice in this pipeline shapes what the data can say, and your project should report them.
+
+- **There are three units, and they're easy to confuse.** A printing, an ad, and a person are different rows. Counting printings inflates ads; counting events inflates people. State your unit of analysis every time you report a number.
+
+- **The schema can't follow a person.** Each runaway record has its own person record, so a woman advertised twice is two "people." Questions about repeated escapes, or about what happened to someone, need record linkage that FOTM doesn't do.
+
+- **Race is stored as free text.** `racial_description` is a comma-separated list of terms, some written by enslavers in the 1800s and some by volunteers today (`white passing` is a 21st-century term). Volunteers disagree on it. A variable like this measures how people were *described*, not who they were.
+
+- **The text is the enslavers'POV.** Everything in an ad was written to recapture a person. Plans, skills, papers, and dress show up because the enslaver feared them. That's why the ads hold evidence about freedom seekers at all, and why it is one-sided.
+
+- **What is transcribed is not a sample.** The transcribed ads are where volunteers have worked, not a random draw. Treat any comparison across decades or states as a comparison of what's been transcribed.
+
+- **Your patterns are a model.** Which phrases count as "passing" is your decision. Report the patterns, their precision from your validation, and whether your results hold when you add or remove one.
+
+## Exploratory Data Analysis
+
+### Check the packaging
+
+> **Peng:** Before opening the wrapped "present," shake the box: how many rows and columns are there? And do they match what you expected? ([Peng, "Check the packaging"](https://bookdown.org/rdpeng/exdata/exploratory-data-analysis-checklist.html#check-the-packaging))
+
+```{r}
+#| label: eda-packaging
+
+nrow(sc_ads)       # every South Carolina ad in your years
+nrow(sc_texts)     # the transcribed printings
+nrow(unique_ads)   # one printing per ad
+nrow(sc_people)    # people, one markup per ad
+ncol(sc_texts)
+```
+
+### Run `str()`
+
+> **Peng:** `str()` shows the class of every column. Make sure numbers are numbers, dates are dates, and text is text. ([Peng, "Run str()"](https://bookdown.org/rdpeng/exdata/exploratory-data-analysis-checklist.html#run-str))
+
+```{r}
+#| label: eda-str
+
+str(sc_people %>% select(passing_group, gender, age, literate, has_alias, in_group, escapee_count))
+```
+
+`read_fotm()` reads everything as text, so `escapee_count` and `min_age` are character columns. That's why Section 8 converts them with `as.numeric()`. Check that `age` is numeric here.
+
+### Check your "n"s
+
+> **Peng:** Count things, and compare the counts with *landmarks*: numbers you know should be true. If you expect 1,000 people and find 20, something's wrong. ([Peng, "Check your 'n's"](https://bookdown.org/rdpeng/exdata/exploratory-data-analysis-checklist.html#check-your-ns))
+
+Landmark from Exercise 3: the number of people tagged `white passing` in the whole database.
+
+```{r}
+#| label: eda-landmark
+
+runaways %>%
+  filter(str_detect(racial_description, "white passing")) %>%
+  nrow()
+```
+
+And the distributions you'll report: are the ages plausible? How many people have no gender recorded? If the maximum age looks impossible, find that row (`sc_people %>% arrange(desc(age))`) and read its ad. Is it a typo in the markup, or something else?
+
+```{r}
+#| label: eda-ns
+
+summary(sc_people$age)
+sc_people %>% count(gender)
+sc_people %>% count(escapee_count, sort = TRUE) %>% head(8)
+```
+
+### A first experiment: which words set passing ads apart?
+
+Section 8 tested *your* color words. Now let the ads suggest words. The chunk below counts every word in the passing ads and in all other ads (one printing per ad), converts the counts to **rates per 1,000 words** so the two groups are comparable, and ranks the words that are most over-represented in passing ads.
+
+```{r}
+#| label: eda-distinctive
+#| fig-width: 8
+#| fig-height: 6
+
+ad_words <- unique_ads %>%
+  select(id, passing_group, text) %>%
+  unnest_tokens(word, text) %>%
+  anti_join(stop_words, by = "word") %>%
+  filter(!str_detect(word, "\\d"), str_length(word) >= 3)
+
+word_rates <- ad_words %>%
+  count(passing_group, word) %>%
+  group_by(passing_group) %>%
+  mutate(per_1000 = n / sum(n) * 1000) %>%
+  ungroup() %>%
+  select(-n) %>%
+  pivot_wider(names_from = passing_group, values_from = per_1000, values_fill = 0)
+
+distinctive <- ad_words %>%
+  filter(passing_group == "Passing ads") %>%
+  count(word, name = "n_in_passing_ads") %>%
+  filter(n_in_passing_ads >= 5) %>%   # ignore rare words
+  left_join(word_rates, by = "word") %>%
+  mutate(ratio = (`Passing ads` + 0.1) / (`All other ads` + 0.1)) %>%
+  arrange(desc(ratio)) %>%
+  head(50)
+
+distinctive
+```
+
+Let's use ggplot to visualize this differently.
+
+```{r}
+distinctive %>%
+  ggplot(aes(x = ratio, y = reorder(word, ratio))) +
+  geom_col(fill = "grey40") +
+  labs(title = "Words most over-represented in South Carolina passing ads",
+       x = "Rate in passing ads ÷ rate in all other ads", y = NULL) +
+  theme_minimal()
+```
+
+The `+ 0.1` keeps the ratio from dividing by zero when a word never appears in the other ads.
+
+## Your turn
+
+Some of these words are just your search terms ("pass," "free," "papers"), so of course they're over-represented. Ignore those. Names and places ("Aiken," "Ruben") usually mean one ad reprinted several times that the fingerprint didn't catch, so treat those carefully. Which words point to how people passed: clothing, work, travel, literacy? Could any of them become a new field, a variable FOTM doesn't have? Write down two or three ideas.
+
+> 

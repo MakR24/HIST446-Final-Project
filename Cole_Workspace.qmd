@@ -1,0 +1,636 @@
+---
+title: "HIST 446 The Past as Data: Final Project Workspace"
+subtitle: "Student: Ava Cole"
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    code-copy: true
+    embed-resources: true
+execute:
+  warning: false
+  cache: false
+---
+
+## Getting Started (November 11, 2026)
+
+Ava,
+
+Your research question asks how Cook County officials in 1885–87 used financial and bureaucratic language to frame the poor and the institutionalized, and how that language worked as social control. So far you've read a handful of pages from the *Journal of the Proceedings of the Board of Commissioners of Cook County* closely. In this workspace, you will turn the **whole volume** into data, so you can test your argument across hundreds of pages instead of five. By the time you push this back to GitHub, you will have:
+
+1.  **A page-by-page dataset of the volume**: one row per page, with its text and the date of the meeting it records.
+2.  **Every page tagged by institution**: the Infirmary, the Insane Asylum, the County Hospital, the County Agent, and the Committee on Public Charities. This lets you keep the poorhouse and the asylum apart, or decide to treat them together, with evidence.
+3.  **Counts of the two vocabularies your argument is about**, financial and medical, by institution and by month, plus **every use of key words in context** so you can read the counts back into the text.
+4.  **A comparison** with the 1886 State Commissioners' investigation of the asylum, an outside voice describing the same institution in the same years.
+
+Read the explanation before you run each chunk. The steps run in order, so each chunk needs the ones before it.
+
+## 0. Your project folders
+
+Your work lives in two folders named after you:
+
+- **`data/cole/`** holds your datasets: the sources you download, and every dataset this workspace makes from them (cleaned, processed, counted).
+- **`output/cole/`** holds what you make to show: charts, maps, and your writing.
+
+```         
+HIST446-Final-Project/
+├── HIST446-Final-Project.Rproj         ← open this first
+├── README.md                           ← how to get, update and commit the repository
+├── .gitignore                          ← one file for the whole class: don't edit it
+├── Cole_Workspace.qmd                  ← this file
+├── ...                                 ← your classmates' workspaces
+├── data/
+│   └── cole/                           ← your datasets: sources, and everything made from them
+│       ├── raw/                        ← put the two files I sent you here
+│       ├── pages/                      ← the volume's pages (created automatically)
+│       └── *.csv                       ← your page dataset, word lists and contexts (created automatically)
+└── output/
+    └── cole/                           ← your charts, maps and writing (created automatically)
+```
+
+### What stays off GitHub
+
+The raw files are large and came from HathiTrust's download service, so they stay off your public repository: the `.gitignore` already keeps `data/cole/raw/` and `data/cole/pages/` off GitHub. Remember not to edit the `.gitignore` (the `README.md` explains why).
+
+### What to commit
+
+Commit this `.qmd` file, the CSV files in `data/cole/`, and everything in `output/cole/`. They document your method, which is part of your Reproducibility grade.
+
+## 1. One-time installation
+
+You only need to run this chunk once. It is set to `eval: false` so it won't run every time you render the document.
+
+```{r}
+#| label: install
+#| eval: false
+
+install.packages(c(
+  "readr",     # reading text files, writing CSV files
+  "dplyr", "tidyr", "stringr",  # data wrangling
+  "ggplot2",   # charts
+  "tidytext"   # splitting text into words
+))
+```
+
+## 2. Load packages and settings
+
+If you're returning to this file at a later time, start here.
+
+```{r}
+#| label: setup
+
+library(readr)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(ggplot2)
+library(tidytext)
+
+# ---- settings ----
+datadir  <- "data/cole"                   # your datasets
+rawdir   <- file.path(datadir, "raw")     # the files I sent you
+pagedir  <- file.path(datadir, "pages")   # one text file per page of the volume
+outdir   <- "output/cole"                 # your charts and writing
+pdfdir   <- file.path(datadir, "full_pdf")  # the full PDF of the volume
+state_report_file <- file.path(rawdir, "state-report-1886.txt")  # the 1886 State Commissioners' report, for comparison
+
+# create the folders if they don't exist yet (no warning if they already do)
+dir.create(pagedir, recursive = TRUE, showWarnings = FALSE)
+dir.create(outdir,  recursive = TRUE, showWarnings = FALSE)
+dir.create(rawdir,  recursive = TRUE, showWarnings = FALSE)
+dir.create(pdfdir,  recursive = TRUE, showWarnings = FALSE)
+```
+
+### Your sources
+
+I'm emailing you four files. Save them before you start the next steps here. the full pdfs are for close reading.
+
+| Source | What you'll get | Where to put it |
+|------------------------|------------------------|------------------------|
+| *Journal of the Proceedings of the Board of Commissioners of Cook County* ([HathiTrust](https://babel.hathitrust.org/cgi/pt?id=mdp.39015073344494)) | A `.zip` file with one text file per page | `data/cole/raw/` |
+| *Journal of the Proceedings of the Board of Commissioners of Cook County* ([HathiTrust](https://babel.hathitrust.org/cgi/pt?id=mdp.39015073344494)) | the full PDF file of the Proceedings | `data/cole/full_pdf/proceedings-1886-87.pdf` |
+| *Special Report of an Investigation of the Management of the Cook County Hospital for the Insane*, State Commissioners of Public Charities, 1886 ([National Library of Medicine](http://resource.nlm.nih.gov/0013071)) | One text file (its OCR text) | `data/cole/raw/state-report-1886.txt` |
+| *Special Report of an Investigation of the Management of the Cook County Hospital for the Insane*, State Commissioners of Public Charities, 1886 ([National Library of Medicine](http://resource.nlm.nih.gov/0013071)) | The full PDF file of the Special Report | `data/cole/full_pdf/investigation-report-1886.pdf` |
+
+## 3. Unzip the volume
+
+HathiTrust gives you the volume as a `.zip` file with **one text file per scanned page**. Each file holds the OCR text (the machine reading) of that page. `unzip()` extracts them into `data/cole/pages/`.
+
+```{r}
+#| label: unzip
+
+# find the zip file I sent you in data/cole/raw/
+zip_file <- list.files(rawdir, pattern = "\\.zip$", full.names = TRUE)
+zip_file   # should show exactly one file
+
+# unzip it into the pages folder, but only the first time (when no .txt pages are there yet)
+if (length(list.files(pagedir, pattern = "\\.txt$", recursive = TRUE)) == 0) {
+  unzip(zip_file[1], exdir = pagedir)
+}
+
+# list every page file, with its full path
+page_files <- list.files(pagedir, pattern = "\\.txt$", recursive = TRUE, full.names = TRUE)
+length(page_files)   # how many pages?
+head(basename(page_files))  # the first few file names
+```
+
+Look at the file names. HathiTrust numbers each scan in order (its **sequence number**). This is **not** the page number printed on the paper: the scans include the cover, blank pages, and the title page, so scan 29 might be printed page 17. In this workspace, pages are identified by their sequence number (`seq`). When you need the printed page number for a citation, open the scan on HathiTrust by adding its sequence number to the end of this link, and read the number off the page: `https://babel.hathitrust.org/cgi/pt?id=mdp.39015073344494&seq=`
+
+## 4. Read the pages into a table
+
+The loop below reads each page file and stores it as one row: the sequence number (taken from the last number in the file name) and the full text of the page.
+
+```{r}
+#| label: read-pages
+
+# Start with an empty table: one column for the page number, one for its text
+pages <- tibble(seq = integer(), text = character())
+
+for (file in page_files) {
+  # go through the page files one at a time
+  seq_number <- as.integer(
+  # turn the result into a number
+    str_extract(basename(file),
+                # file name only, without the folders
+                "\\d+(?=\\.txt$)")) 
+                # the digits that come right before ".txt"
+  page_text  <- read_file(file) 
+  # read the whole page into one piece of text
+  pages <- bind_rows(pages, 
+                     # add a row to the table:
+                     tibble(seq = seq_number, text = page_text))
+                     # this page's number and its text
+}
+
+pages <- pages %>% arrange(seq)   # put the pages in page order (see note)
+
+nrow(pages)       # how many pages were read
+pages$text[30]    # read the 30th page; change the number to read other pages
+```
+
+### Find the meeting dates
+
+The *Proceedings* record the Board's meetings in order, and each meeting starts with its date ("Monday, January 10, 1887"). We find the first full date on each page. Pages without a date belong to the meeting that started on an earlier page, so `fill()` copies the last date found down to them.
+
+```{r}
+#| label: dates
+
+# A regular expression list: any one of the twelve month names
+month_names <- "January|February|March|April|May|June|July|August|September|October|November|December"
+
+# The full date pattern, e.g. "March 3, 1887" or "March 3 1887"
+date_pattern <- paste0("(", month_names, ")",  # a month name
+                       "\\s+",         # one or more spaces (or a line break)
+                       "\\d{1,2}",    # a day: one or two digits
+                       ",?",          # an optional comma
+                       "\\s+",        # one or more spaces
+                       "18\\d\\d")     # a year from 1800 to 1899
+
+pages <- pages %>%
+  mutate(date_text = str_extract(text, date_pattern),   
+         # the first date found on each page, or NA if none
+         date = as.Date(str_remove(date_text, ","),    
+                        # drop the comma: "March 3 1887"
+                        format = "%B %d %Y")) %>%       
+                        # %B = full month name, %d = day, %Y = 4-digit year
+  fill(date, .direction = "down") %>%                   
+  # a page with no date gets the date from the page above it
+  mutate(month = format(date, "%Y-%m"))                 
+  # turn the date into a "1887-03" label for grouping
+
+pages %>% count(month)   # how many pages fall in each month
+```
+
+Some dates on a page belong to a contract, a bill, or a report covering an earlier month, not to the meeting itself. Skim the `date_text` column for pages where the date jumps backward, and treat the `month` column as approximate.
+
+## 5. Clean the OCR
+
+Before counting words, we fix two common OCR problems:
+
+- **Hyphenated line breaks.** A word split across lines ("ex-\npenses") would be counted as two half-words. We rejoin it.
+- **Mostly-number pages.** Financial statements and bills are long tables of numbers. They matter to your argument, but their OCR is mostly digits, so we flag them with `share_digits`, the share of characters that are digits.
+
+```{r}
+#| label: clean
+
+# clean the OCR text and flag pages that are mostly tables of numbers
+pages <- pages %>%
+  mutate(
+    # "chari-" + line break + "ties" becomes "charities"
+    clean_text   = str_replace_all(text, "(\\w)-\\s*\\n\\s*(\\w)", "\\1\\2"),  # rejoin hyphenated words
+    clean_text   = str_squish(clean_text),  # collapse runs of spaces and line breaks into single spaces
+    n_chars      = str_length(clean_text),  # number of characters on the page
+    share_digits = str_count(clean_text, "\\d") / pmax(n_chars, 1),  # share of characters that are digits (pmax avoids dividing by 0 on empty pages)
+    table_page   = share_digits > 0.3  # TRUE if more than 30% digits: probably a table
+  )
+
+pages %>% count(table_page)  # how many pages look like tables
+```
+
+Save the page table. This CSV is your main dataset.
+
+```{r}
+#| label: save-pages
+
+# save one row per page, without the raw OCR text (write_excel_csv keeps the text readable in Excel)
+write_excel_csv(pages %>% select(seq, date, month, table_page, share_digits, clean_text),
+                file.path(datadir, "proceedings-pages.csv"))
+```
+
+## 6. Which institution is on the page?
+
+Your Historical Context feedback asked you to keep the **Infirmary** (the poorhouse) and the **Insane Asylum** apart, or to explain why you treat them together. Here we tag each page with every institution it mentions. A page can mention several.
+
+`regex(..., ignore_case = TRUE)` makes the search ignore capital letters. The patterns allow for small variations: `(on|of)` matches "Committee on Public Charities" and "Committee of Public Charities".
+
+```{r}
+#| label: institutions
+
+# one row per institution: its name, and a pattern that finds it (| means "or"; " ?" means an optional space)
+institution_patterns <- tribble(
+  ~institution,                   ~pattern,
+  "Infirmary",                    "infirmary|poor ?house|alms ?house",
+  "Insane Asylum",                "insane asylum|hospital for the insane",
+  "County Hospital",              "county hospital",
+  "County Agent",                 "county agent",
+  "Committee on Public Charities","committee (on|of) public charities"
+)
+
+# an empty table to collect which pages mention which institution
+page_institutions <- tibble(seq = integer(), institution = character())
+
+# for each institution, find the pages that mention it
+for (i in seq_len(nrow(institution_patterns))) {
+  matches <- pages %>%  # start from all pages
+    # keep pages that match this institution's pattern, ignoring capitals
+    filter(str_detect(clean_text, regex(institution_patterns$pattern[i], ignore_case = TRUE))) %>%
+    transmute(seq, institution = institution_patterns$institution[i])  # keep the page number, labelled with the institution
+  page_institutions <- bind_rows(page_institutions, matches)  # add these pages to the collection
+}
+
+page_institutions %>% count(institution, sort = TRUE)  # pages per institution (a page can mention several)
+```
+
+How many pages mention **both** the Infirmary and the Insane Asylum? Try `page_institutions %>% count(seq) %>% filter(n > 1)`. Read two of those pages: are the two institutions discussed together, or just listed side by side?
+
+> 
+
+## 7. Your two vocabularies
+
+Your argument is that officials described the institutions in financial and bureaucratic terms rather than medical ones. Here you turn that argument into a test, by writing down **which words count as which**.
+
+Choosing these words is an interpretive decision. "Care," for example, might be medical ("care of the sick") or administrative ("in the care of the Warden"). Start with the lists below, then add, remove, and justify. The lists are saved to `data/cole/word-lists.csv` so your choices are documented.
+
+```{r}
+#| label: word-lists
+
+# two vocabularies, one word per row: add or remove words as you read
+word_lists <- tribble(
+  ~vocabulary,  ~word,
+  "financial",  "cost",
+  "financial",  "costs",
+  "financial",  "expense",
+  "financial",  "expenses",
+  "financial",  "economy",
+  "financial",  "waste",
+  "financial",  "abuses",
+  "financial",  "contract",
+  "financial",  "contracts",
+  "financial",  "contractor",
+  "financial",  "bills",
+  "financial",  "supplies",
+  "financial",  "salary",
+  "financial",  "salaries",
+  "financial",  "appropriation",
+  "financial",  "dollars",
+  "medical",    "patient",
+  "medical",    "patients",
+  "medical",    "treatment",
+  "medical",    "cure",
+  "medical",    "cured",
+  "medical",    "disease",
+  "medical",    "diseases",
+  "medical",    "physician",
+  "medical",    "physicians",
+  "medical",    "medical",
+  "medical",    "nurse",
+  "medical",    "nurses",
+  "medical",    "sick",
+  "medical",    "insanity"
+)
+
+write_csv(word_lists, file.path(datadir, "word-lists.csv"))  # save the lists so readers can see exactly which words you counted
+word_lists %>% count(vocabulary)  # how many words are in each list
+```
+
+Now split every page into words, keep only the words on your lists, and count them by month. We count **per 1,000 words** because months with longer meetings print more pages and would otherwise always look bigger.
+
+```{r}
+#| label: count-vocab
+
+# split every page into words: one row per word, with its page and month
+page_words <- pages %>%
+  select(seq, month, clean_text) %>%
+  unnest_tokens(word, clean_text)  # also lowercases the words and drops punctuation
+
+words_per_month <- page_words %>% count(month, name = "total_words")  # all words per month, to turn counts into rates
+
+# count the words from each list per month, then per 1,000 words
+vocab_by_month <- page_words %>%
+  inner_join(word_lists, by = "word") %>%  # keep only words that are on one of the lists
+  count(month, vocabulary) %>%  # list words per month and vocabulary
+  left_join(words_per_month, by = "month") %>%  # add that month's total word count
+  mutate(per_1000 = n / total_words * 1000)  # a rate, so months with more pages don't look bigger
+
+vocab_by_month
+```
+
+```{r}
+#| label: vocab-plot
+#| fig-width: 9
+#| fig-height: 4.5
+
+ggplot(vocab_by_month, aes(x = month, y = per_1000, fill = vocabulary)) +  # months across, rate up, one color per list
+  geom_col(position = "dodge") +  # bars side by side, not stacked
+  # titles and labels
+  labs(title = "Financial and medical vocabulary in the Board's Proceedings",
+       subtitle = "Words from each list per 1,000 words, by month (approximate)",
+       x = NULL, y = "Per 1,000 words", fill = NULL) +
+  theme_minimal() +  # a plain background
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  # tilt the month labels so they don't overlap
+```
+
+```{r}
+# save the last chart to output/cole/
+ggsave(file.path(outdir, "vocabulary-by-month.png"), width = 9, height = 4.5)
+```
+
+And by institution, using the page tags from Section 6:
+
+```{r}
+#| label: vocab-institution
+
+# the same rates, for the pages that mention each institution
+vocab_by_institution <- page_words %>%
+  inner_join(page_institutions, by = "seq", relationship = "many-to-many") %>%  # attach institutions to words by page (a page can count for several)
+  group_by(institution) %>%
+  mutate(total_words = n()) %>%  # total words on each institution's pages
+  ungroup() %>%
+  inner_join(word_lists, by = "word") %>%  # keep only list words
+  count(institution, vocabulary, total_words) %>%  # list words per institution and vocabulary
+  mutate(per_1000 = n / total_words * 1000)  # per 1,000 words
+
+vocab_by_institution %>% select(institution, vocabulary, n, per_1000)
+```
+
+Is the financial vocabulary more frequent than the medical one everywhere, or only for some institutions? Does the Insane Asylum look different from the Infirmary?
+
+> 
+
+Does anything change around the 1886 State investigation (early 1886) or the 1887 "boodle" trials?
+
+> 
+
+Run:
+
+```{r}
+# which list words appear most often? Check that each one means what you think
+page_words %>% inner_join(word_lists, by = "word") %>% count(word, sort = TRUE)
+```
+
+Which word on your lists is doing most of the work? Why could that be?
+
+> 
+
+## 8. Read the counts back into the text: keywords in context
+
+`keyword_in_context()` finds every use of a word and shows the words around it, like the "Contexts" tool in Voyant.
+
+```{r}
+#| label: kwic-function
+
+# find every use of a keyword and return the text around it ("keyword in context");
+# window = how many characters to keep on each side
+keyword_in_context <- function(pages, keyword, window = 60) {
+  results <- tibble(seq = integer(), month = character(), context = character())  # an empty table for the results
+  pattern <- regex(paste0("\\b", keyword, "\\b"), ignore_case = TRUE)  # the keyword as a whole word (\b = word edge), ignoring capitals
+
+  for (i in seq_len(nrow(pages))) {  # go through the pages one at a time
+    text <- pages$clean_text[i]  # this page's text
+    positions <- str_locate_all(text, pattern)[[1]]  # start and end of every match on this page
+    for (j in seq_len(nrow(positions))) {  # for each match on the page
+      start <- max(1, positions[j, "start"] - window)  # start `window` characters before it (but not before the page starts)
+      end   <- min(str_length(text), positions[j, "end"] + window)  # end `window` characters after it (but not after the page ends)
+      results <- bind_rows(results, tibble(seq = pages$seq[i],  # add a row: page, month, and the passage
+                                           month = pages$month[i],
+                                           context = str_sub(text, start, end)))
+    }
+  }
+  results  # return the collected passages
+}
+```
+
+Try it with words that name the people in these institutions:
+
+```{r}
+#| label: kwic-examples
+
+inmate_contexts <- keyword_in_context(pages, "inmates")  # every use of "inmates", with 60 characters on each side
+nrow(inmate_contexts)  # how many times it appears
+head(inmate_contexts$context, 10)  # read the first 10 passages
+```
+
+```{r}
+bodies_contexts <- keyword_in_context(pages, "bodies")  # the same for "bodies"
+bodies_contexts %>% select(seq, month, context)  # page, month, and passage
+```
+
+```{r}
+# save both sets of passages to data/cole/
+write_excel_csv(inmate_contexts, file.path(datadir, "kwic-inmates.csv"))
+write_excel_csv(bodies_contexts, file.path(datadir, "kwic-bodies.csv"))
+```
+
+Run `keyword_in_context()` for "patients," "paupers," "insane," and "economy." Who gets called a *patient*, and who an *inmate* or a *pauper*? Does it depend on the institution? Copy two or three revealing contexts into your notes with their sequence numbers, then look up their printed page numbers on HathiTrust. They are evidence you can quote.
+
+## 9. An outside voice: the 1886 State report
+
+The State Commissioners' 1886 report investigated the same asylum, in the same years, from outside the County Board. It was prompted by Dr. J. G. Kiernan's public criticism in October 1885. Does it use the same vocabulary?
+
+```{r}
+#| label: state-report
+
+# read the State report and clean it the same way as the Proceedings
+state_text <- read_file(state_report_file) %>%
+  str_replace_all("(\\w)-\\s*\\n\\s*(\\w)", "\\1\\2") %>%  # rejoin hyphenated words
+  str_squish()  # collapse extra spaces and line breaks
+
+state_words <- tibble(text = state_text) %>% unnest_tokens(word, text)  # split it into words: one row per word
+
+# rates of each vocabulary in the two sources, per 1,000 words
+compare_vocab <- bind_rows(
+  page_words  %>% mutate(source = "County Board Proceedings") %>% select(source, word),  # County words, labelled
+  state_words %>% mutate(source = "State Commissioners' report, 1886")  # State words, labelled
+) %>%
+  group_by(source) %>%
+  mutate(total_words = n()) %>%  # total words in each source
+  ungroup() %>%
+  inner_join(word_lists, by = "word") %>%  # keep only list words
+  count(source, vocabulary, total_words) %>%  # list words per source and vocabulary
+  mutate(per_1000 = n / total_words * 1000)  # per 1,000 words, so the longer source doesn't win by size
+
+compare_vocab %>% select(source, vocabulary, n, per_1000)
+```
+
+The State report is about 21 pages; the *Proceedings* volume is hundreds. That's why we compare rates per 1,000 words, not raw counts. Even so, a short text gives noisy rates, so read the report itself before drawing conclusions.
+
+## 10. Check your work
+
+Before you use this data in your project:
+
+- [ ] **Page count.** `nrow(pages)` should equal the number of scans in the volume on HathiTrust.
+- [ ] **Landmarks.** The pages you already know turn up where they should. `pages %>% filter(str_detect(clean_text, "Aldrich")) %>% select(seq, month)` should include the scans of Aldrich's address (printed pp. 392–398), and `report_pages` (in the optional section) should include the scan of p. 133 with the "Disposition of bodies." Check both on HathiTrust.
+- [ ] **Spot-check the tags.** Open five pages tagged "Insane Asylum" and five tagged "Infirmary." Is each tag right?
+- [ ] **Spot-check OCR.** Compare three pages' `clean_text` with the scans on HathiTrust. Are your list words read correctly?
+- [ ] **Commit.** This `.qmd` file, the CSV files in `data/cole/`, and everything in `output/cole/` are committed. `data/cole/raw/` and `data/cole/pages/` are not.
+
+## Thinking like a historian about this pipeline
+
+Every step here **transforms the source**.
+
+- **These are the officials' words.** Everything in this dataset was written or approved by the Board, its committees, or its employees. You've already noticed the patients' silence and the data inherits it.
+
+- **The printed record was political.** The Proceedings were published in years of public scandal, from the 1885-86 investigation to the 1887 "boodle" trials. Talk of "waste" and "abuses" can be reform rhetoric aimed at voters as much as a way of managing the poor.
+
+- **Your word lists are an argument.** The result depends on which words you chose. The ones I have here are only suggestions. Report your lists and your reasons, and test whether the result holds when you add or remove a few words.
+
+- **OCR reads tables badly.** Financial statements, bills, and monthly census tables are where much of the financial language lives, and they are where OCR makes the most mistakes. Give extra caution when reading pages flagged `table_page`.
+
+- **Categories are evidence too.** "Inmate," "pauper," "patient," "insane": the labels officials used are part of your question, not neutral descriptions to adopt.
+
+## Exploratory Data Analysis
+
+### Check the packaging
+
+> **Peng:** Before opening the wrapped "present," shake the box: how many rows and columns are there? And do they match what you expected? ([Peng, "Check the packaging"](https://bookdown.org/rdpeng/exdata/exploratory-data-analysis-checklist.html#check-the-packaging))
+
+```{r}
+#| label: eda-packaging
+
+nrow(pages)  # rows: one per page
+ncol(pages)  # columns
+```
+
+### Run `str()`
+
+> **Peng:** `str()` shows the class of every column. Make sure numbers are numbers, dates are dates, and text is text. ([Peng, "Run str()"](https://bookdown.org/rdpeng/exdata/exploratory-data-analysis-checklist.html#run-str))
+
+```{r}
+#| label: eda-str
+
+str(pages %>% select(-text, -clean_text))  # each column's type and first values, without the long text columns
+```
+
+### Check your "n"s
+
+> **Peng:** Count things, and compare the counts with *landmarks*: numbers you know should be true. If you expect 1,000 people and find 20, something's wrong. ([Peng, "Check your 'n's"](https://bookdown.org/rdpeng/exdata/exploratory-data-analysis-checklist.html#check-your-ns))
+
+```{r}
+#| label: eda-ns
+
+pages %>% count(month)  # pages per month
+
+# in how many different months does each institution appear?
+page_institutions %>%
+  left_join(pages %>% select(seq, month), by = "seq") %>%  # add each page's month
+  distinct(institution, month) %>%  # one row per institution and month
+  count(institution, name = "months_with_pages")  # count the months
+```
+
+### A first experiment: what words are distinctive of each institution?
+
+```{r}
+#| label: eda-tfidf
+#| fig-width: 10
+#| fig-height: 7
+
+# the 10 words most distinctive of each institution's pages
+distinctive <- page_words %>%
+  inner_join(page_institutions, by = "seq", relationship = "many-to-many") %>%  # attach institutions to words by page
+  anti_join(stop_words, by = "word") %>%  # drop common words like "the" and "of"
+  filter(!str_detect(word, "\\d"), str_length(word) >= 3) %>%  # drop numbers and very short words (often OCR noise)
+  count(institution, word) %>%  # how often each word appears with each institution
+  bind_tf_idf(word, institution, n) %>%  # high for words common on one institution's pages but rare on the others'
+  group_by(institution) %>%
+  slice_max(tf_idf, n = 10, with_ties = FALSE) %>%  # keep the top 10 per institution
+  ungroup()
+
+distinctive %>%
+  mutate(word = reorder_within(word, tf_idf, institution)) %>%  # order the bars within each panel
+  ggplot(aes(x = tf_idf, y = word)) +
+  geom_col(fill = "grey40") +  # one bar per word
+  scale_y_reordered() +  # needed with reorder_within()
+  facet_wrap(~ institution, scales = "free_y", ncol = 2) +  # one panel per institution
+  labs(title = "Words most distinctive of each institution's pages (tf-idf)",
+       x = "tf-idf", y = NULL)
+```
+
+Do any of these words belong on your financial or medical lists? Are there words that suggest a third vocabulary you hadn't considered, such as discipline, labor, or morality? Write down two or three ideas.
+
+> 
+
+## Optional: the monthly reports as a second dataset
+
+The Infirmary's and asylum's monthly reports, like the "Disposition of bodies" on p. 133, are small tables: deaths, discharges, and where bodies went (Rush Medical College, Hahnemann, Northwestern Dental, burial). Turning them into a dataset would let you count what the officials' language describes.
+
+OCR scrambles tables, so the most reliable way is to **transcribe them by hand** into a spreadsheet. With roughly two years of monthly reports, that's a few hours of careful work. Find the pages first:
+
+```{r}
+#| label: find-monthly-reports
+
+# find the pages with the monthly reports on where bodies went
+report_pages <- pages %>%
+  filter(str_detect(clean_text, regex("disposition of bodies", ignore_case = TRUE))) %>%  # pages that mention "disposition of bodies"
+  select(seq, month)  # keep page number and month
+
+report_pages
+```
+
+Then create a spreadsheet with these columns, one row per monthly report, and save it as `data/cole/monthly-reports.csv`:
+
+`month, institution, deaths, to_rush, to_hahnemann, to_northwestern_dental, other_schools, buried, claimed_by_family, seq, printed_page`
+
+Fill in `printed_page` by hand from the scan on HathiTrust, so you can cite each report.
+
+Once the file exists, this chunk charts where the bodies went. Delete `#| eval: false` and run it:
+
+```{r}
+#| label: monthly-reports-chart
+#| eval: false
+
+reports_file <- file.path(datadir, "monthly-reports.csv")  # the table you type up from those pages
+
+if (file.exists(reports_file)) {  # only runs once you've made the file
+  reports <- read_csv(reports_file)  # read it in
+
+  reports %>%
+    # turn the six disposition columns into two: disposition and number of bodies
+    pivot_longer(c(to_rush, to_hahnemann, to_northwestern_dental, other_schools,
+                   buried, claimed_by_family),
+                 names_to = "disposition", values_to = "bodies") %>%
+    ggplot(aes(x = month, y = bodies, fill = disposition)) +  # months across, one color per disposition
+    geom_col() +  # stacked bars: total bodies per month
+    facet_wrap(~ institution, ncol = 1) +  # one panel per institution
+    labs(title = "Disposition of bodies, by month",
+         x = NULL, y = "Bodies", fill = NULL) +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))  # tilt the month labels
+} else {
+  message("No monthly-reports.csv yet. This section is optional.")
+}
+```
+
+Remember the context: an Illinois law of 1885 governed the transfer of unclaimed bodies to medical schools, so these numbers record a practice that was legally new. Who counted as "unclaimed"? Write down any observations or thoughts you might have now:
+
+> 
+

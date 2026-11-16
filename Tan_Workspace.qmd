@@ -1,0 +1,654 @@
+---
+title: "HIST 446 The Past as Data: Final Project Workspace"
+subtitle: "Student: Jasmine Tan"
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    code-copy: true
+    embed-resources: true
+execute:
+  warning: false
+  cache: false
+---
+
+## Getting Started (November 11, 2026)
+
+Jasmine,
+
+Your research question asks how police raids and expanding police powers affected secret-society activity in Singapore. In my feedback on your Project Overview, I suggested a version that your sources can answer with data: **how did the geography and character of reported secret-society violence in Singapore change as police powers expanded between 1955 and 1965?**
+
+NewspaperSG doesn't offer a way to download articles in bulk, so in this workspace **you build the dataset yourself**, by reading articles and recording each reported incident in a spreadsheet. That's slower than downloading, but it's how many historical datasets are made, and every row will be one you've read. R then does the counting, charting, and mapping. By the time you push this back to GitHub, you will have:
+
+1. **A chart of press coverage**: how many NewspaperSG articles mention secret societies each year, 1950–1969, with the legal changes marked.
+2. **An incident dataset**: one row per incident you read about, with its date, place, type, the society named, and what the police did.
+3. **The character of incidents over time**: how the mix of fights, raids, arrests, and detentions changed from one legal period to the next.
+4. **A map of incidents by period**, so you can see whether the geography changed.
+5. **The press's vocabulary**: how headlines named the societies and their members, year by year.
+
+Read the explanation before you run each chunk. The steps run in order, so each chunk needs the ones before it.
+
+### Your period
+
+These dates come from my comments on your Historical Context. Keep them in front of you: they define the **periods** your data will be compared across.
+
+| Date | Event |
+|------|-------|
+| 1948–1960 | The Malayan Emergency |
+| May 1954 | National Service riots (Chinese middle-school students) |
+| May 1955 | Hock Lee bus riots; students joined the strikers |
+| Sept. 1955 | Criminal Law (Temporary Provisions) Ordinance: detention without trial, aimed at secret societies |
+| Oct. 1956 | Riots involving Chinese middle-school students |
+| Aug. 1958 | Amendment: preventive detention of up to six months |
+| June 1959 | Self-government; the PAP takes office |
+| Sept. 1959 | Amendment under the new government: detention of up to 12 months |
+| Sept. 1963 | Merger with Malaysia |
+| July and Sept. 1964 | Race riots |
+| Aug. 9, 1965 | Independence |
+
+Singapore was a colony until 1959, so the 1950s are **late colonial**, not pre-colonial. After 1963, write **post-merger** or **post-independence**, depending on the date.
+
+::: {.callout-important}
+## Protect the people in your sources
+
+Many people named in these articles, or their children, are still alive, and your repository is public. **Don't record anyone's name in your dataset.** Record roles instead ("headman," "fighter," "youth, 17"). Keep notes about personal details, individual experiences, names, biographies, and family ties in the `private/` folder you'll create in Section 0, which never goes to GitHub. Individual people's stories can shape the questions you ask without appearing in your data.
+:::
+
+::: {.callout-note}
+## Copyright
+
+Newspaper articles from the 1950s and 1960s are still under copyright. Your dataset records facts *about* each article (date, headline, page, link) and your own coding of it. **Don't paste article text into your files.** Quote short passages in your final paper, with a citation, as you would any source.
+:::
+
+### Your sources
+
+| Source | What it is for |
+|---|---|
+| [NewspaperSG](https://eresources.nlb.gov.sg/newspapers) (National Library Board) | Your data: articles from *The Straits Times* and other papers |
+| National Archives of Singapore, colonial files on secret societies | Official records to compare with the press, if your request comes through |
+| Mak Lau Fong, *The Sociology of Secret Societies* (1981); Carl Trocki, *Singapore: Wealth, Power and the Culture of Control* (2006) | Modern scholarship for your context |
+| Wilfred Blythe, *The Impact of Chinese Secret Societies in Malaya* (1969) | Written by a former colonial official: read it as partly a primary source |
+
+## 0. Your project folders
+
+Your work lives in two folders named after you:
+
+- **`data/tan/`** holds your datasets: the sources you download, and every dataset this workspace makes from them (cleaned, processed, counted).
+- **`output/tan/`** holds what you make to show: charts, maps, and your writing.
+
+```
+HIST446-Final-Project/
+├── HIST446-Final-Project.Rproj         ← open this first
+├── README.md                           ← how to get, update and commit the repository
+├── .gitignore                          ← one file for the whole class: don't edit it
+├── Tan_Workspace.qmd                   ← this file
+├── ...                                 ← your classmates' workspaces
+├── data/
+│   └── tan/                            ← your datasets: sources, and everything made from them
+│       ├── search-counts.csv           ← your NewspaperSG counts (created in Section 3)
+│       ├── incidents.csv               ← your incident dataset (created in Section 4)
+│       ├── places.csv                  ← coordinates for your places (created in Section 7)
+│       └── *.csv                       ← your counts by period (created automatically)
+├── private/                            ← your private notes (create this folder yourself)
+└── output/
+    └── tan/                            ← your charts, maps and writing (created automatically)
+```
+
+Also create a folder named `private/` at the top of the repository (beside `data/`) for your private notes.
+
+### What stays off GitHub
+
+The `.gitignore` already keeps the `private/` folder off GitHub: anything you put in it stays on your computer. Remember not to edit the `.gitignore` (the `README.md` explains why).
+
+### What to commit
+
+Do commit this `.qmd` file, everything in `data/tan/`, and everything in `output/tan/`. Your coded dataset is the heart of your method, and it is part of your Reproducibility grade.
+
+## 1. One-time installation
+
+You only need to run this chunk once. It is set to `eval: false` so it won't run every time you render the document.
+
+```{r}
+#| label: install
+#| eval: false
+
+install.packages(c(
+  "readr",        # reading and writing CSV files
+  "dplyr", "tidyr", "stringr",  # data wrangling
+  "ggplot2",      # charts
+  "tidytext",     # splitting text into words
+  "tidygeocoder", # finding coordinates for place names
+  "leaflet"       # interactive maps
+))
+```
+
+## 2. Load packages and settings
+
+If you're returning to this file at a later time, start here.
+
+```{r}
+#| label: setup
+
+library(readr)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(ggplot2)
+library(tidytext)
+library(tidygeocoder)
+library(leaflet)
+
+# ---- settings ----
+datadir        <- "data/tan"                                # your datasets
+counts_file    <- file.path(datadir, "search-counts.csv")
+incidents_file <- file.path(datadir, "incidents.csv")
+places_file    <- file.path(datadir, "places.csv")
+outdir         <- "output/tan"                              # your charts, maps and writing
+
+# The legal milestones, for the charts
+milestones <- tribble(
+  ~date,        ~event,
+  "1955-09-01", "Ordinance (detention without trial)",
+  "1958-08-01", "Amendment: 6 months",
+  "1959-09-01", "Amendment: 12 months",
+  "1963-09-16", "Merger with Malaysia",
+  "1965-08-09", "Independence"
+) %>%
+  mutate(date = as.Date(date), year = as.numeric(format(date, "%Y")) + as.numeric(format(date, "%j")) / 365)
+
+dir.create(datadir, recursive = TRUE, showWarnings = FALSE)
+dir.create(outdir,  recursive = TRUE, showWarnings = FALSE)
+```
+
+## 3. How much did the press write about secret societies?
+
+Before you code individual articles, measure the **volume** of coverage. NewspaperSG shows how many articles match a search, and you can filter by year. You'll record those counts by hand.
+
+The chunk below creates `data/tan/search-counts.csv` with one row per year and search term, and an empty `articles` column:
+
+```{r}
+#| label: counts-template
+
+if (!file.exists(counts_file)) {
+  expand_grid(term = c("secret society", "gangster"), year = 1950:1969) %>%
+    mutate(articles = NA) %>%
+    write_csv(counts_file)
+}
+```
+
+**How to fill it in.** On NewspaperSG, search for each term in quotation marks (`"secret society"`), set the date range to one year (January 1 to December 31), and copy the number of results into the `articles` column. Do the same for each year and term. Open the CSV in Excel or Google Sheets, fill it in, and save it as CSV.
+
+::: {.callout-tip}
+## Your turn
+
+Add a third term if you find one the papers used often, such as `"samseng"` (a Hokkien word for gangster that the English-language press borrowed). Add its 20 rows to the CSV. Write down the date you did these searches: NewspaperSG keeps adding newspapers, so the counts can change.
+:::
+
+Once the counts are in, chart them with the milestones marked:
+
+```{r}
+#| label: counts-chart
+#| fig-width: 10
+#| fig-height: 5
+
+search_counts <- read_csv(counts_file, show_col_types = FALSE)
+
+if (all(is.na(search_counts$articles))) {
+  message("Fill in data/tan/search-counts.csv first.")
+} else {
+  ggplot(search_counts, aes(x = year, y = articles, color = term)) +
+    geom_vline(data = milestones, aes(xintercept = year), linetype = "dashed", color = "grey60") +
+    geom_text(data = milestones, aes(x = year, y = Inf, label = event),
+              inherit.aes = FALSE, angle = 90, hjust = 1.05, vjust = -0.4, size = 3, color = "grey40") +
+    geom_line() +
+    geom_point() +
+    labs(title = "NewspaperSG articles mentioning each term, by year",
+         subtitle = "Counts recorded by hand from NewspaperSG searches",
+         x = NULL, y = "Articles", color = "Search term") +
+    theme_minimal()
+}
+```
+
+A rise in articles can mean more incidents, more police activity, more press interest, or more newspapers digitized for that year. Which explanation fits depends on what you find when you read the articles.
+
+## 4. Build your incident dataset
+
+This is the core of your project. You'll read articles and record **one row per reported incident**: a fight, a raid, an arrest, a murder, a detention order. The chunk below creates `data/tan/incidents.csv` with the right columns, if it doesn't exist yet:
+
+```{r}
+#| label: incidents-template
+
+if (!file.exists(incidents_file)) {
+  tibble(
+    incident_id     = character(),  # your own id: 1, 2, 3...
+    article_date    = character(),  # date of the article, YYYY-MM-DD
+    newspaper       = character(),  # e.g. The Straits Times
+    headline        = character(),  # the headline as printed
+    page            = character(),  # page number
+    article_url     = character(),  # the NewspaperSG link to the article
+    incident_date   = character(),  # date of the incident, YYYY-MM-DD (or the article date, if not given)
+    incident_type   = character(),  # one of the types in the codebook below
+    police_action   = character(),  # one of the actions in the codebook below
+    place_text      = character(),  # the place as printed: "Sago Lane", "Geylang Road"
+    area            = character(),  # the district it's in: "Chinatown", "Geylang"
+    society_named   = character(),  # the society, if named: "24", "Sar Ji". Leave empty if none
+    people_involved = character(),  # how many people, if given
+    involves_students = character(),  # yes / no / unclear
+    law_cited       = character(),  # e.g. "Criminal Law (Temporary Provisions) Ordinance"
+    notes           = character()   # anything else. No personal names!
+  ) %>%
+    write_csv(incidents_file)
+}
+```
+
+### Codebook
+
+Use **only** these values in the two coded columns, so R can count them. If something doesn't fit, use `other` and explain it in `notes`. If you find yourself writing the same note often, that's a new category: add it here and tell me.
+
+| `incident_type` | Meaning |
+|---|---|
+| `fight` | A clash between groups or individuals |
+| `murder` | A killing attributed to a society |
+| `assault` | An attack on a person (not a group fight) |
+| `extortion` | Demands for "protection" money |
+| `recruitment` | Initiation ceremonies, recruiting, school "infiltration" |
+| `raid` | A police raid, reported as the main event |
+| `detention` | A detention order under the Ordinance |
+| `other` | Explain in `notes` |
+
+| `police_action` | Meaning |
+|---|---|
+| `none reported` | The article reports no police action |
+| `investigation` | Police are investigating |
+| `arrest` | Arrests made |
+| `raid` | A raid |
+| `detention` | Detention without trial under the Ordinance |
+| `court` | A trial or court appearance |
+
+### A sampling plan
+
+You can't read every article, so decide **which** articles to read, and use the same rule for every year. That rule is part of your method, and you'll report it. A good start:
+
+- **One month per year, 1953–1967**, the same month each year (say, March). Record every incident reported that month.
+- **Then add the months around the legal changes**: September 1955, August 1958, and September–October 1959, so you can compare before and after.
+
+Search NewspaperSG with your terms and a one-month date range, open each article, and record its incidents. If several articles report the same incident, record it once (from the first report) and put the other links in `notes`.
+
+::: {.callout-tip}
+## How to read each article
+
+Ask who is speaking. Most of these reports come from the police or the courts, so the article tells you what *they* said happened. Record what the article reports, and use `notes` for what it doesn't say: Were the people arrested ever charged? Is "secret society" the reporter's claim or the police's?
+:::
+
+**Date format matters.** Type dates as `1959-10-15`. If you use Excel, format the date columns as **Text** before you type, or Excel will change them.
+
+## 5. Load and check your incidents
+
+Once you have some incidents recorded, load the file and check it. The chunks from here on only run when the file has at least one row.
+
+```{r}
+#| label: load-incidents
+
+incidents <- read_csv(incidents_file, col_types = cols(.default = col_character()))
+has_incidents <- nrow(incidents) > 0
+nrow(incidents)
+```
+
+Check for typos in the coded columns and for dates R can't read:
+
+```{r}
+#| label: check-incidents
+#| eval: !expr has_incidents
+
+allowed_types   <- c("fight", "murder", "assault", "extortion", "recruitment", "raid", "detention", "other")
+allowed_actions <- c("none reported", "investigation", "arrest", "raid", "detention", "court")
+
+incidents <- incidents %>%
+  mutate(incident_date = as.Date(incident_date),
+         year          = as.numeric(format(incident_date, "%Y")))
+
+# rows with a type or action that isn't in the codebook
+incidents %>% filter(!(incident_type %in% allowed_types)) %>% select(incident_id, incident_type)
+incidents %>% filter(!(police_action %in% allowed_actions)) %>% select(incident_id, police_action)
+
+# rows with a date R couldn't read, or no place
+incidents %>% filter(is.na(incident_date)) %>% select(incident_id)
+incidents %>% filter(is.na(place_text)) %>% select(incident_id, headline)
+```
+
+Each of these should return an empty table. If not, fix those rows in the CSV and run this section again.
+
+Now assign each incident to a **period**, using the legal milestones as boundaries. `cut()` sorts each date into the period it falls in:
+
+```{r}
+#| label: periods
+#| eval: !expr has_incidents
+
+period_breaks <- as.Date(c("1900-01-01", "1955-09-01", "1959-09-01", "1963-09-16", "1965-08-09", "2000-01-01"))
+period_labels <- c("Before the Ordinance (to Aug 1955)",
+                   "Ordinance, 6-month detention (Sept 1955 to Aug 1959)",
+                   "12-month detention (Sept 1959 to Sept 1963)",
+                   "In Malaysia (Sept 1963 to Aug 1965)",
+                   "Independent (from Aug 1965)")
+
+incidents <- incidents %>%
+  mutate(period = cut(incident_date, breaks = period_breaks, labels = period_labels, right = FALSE))
+
+incidents %>% count(period)
+```
+
+## 6. The character of incidents over time
+
+What kinds of incidents did the press report in each period, and what did the police do?
+
+```{r}
+#| label: types-by-period
+#| eval: !expr has_incidents
+#| fig-width: 10
+#| fig-height: 5
+
+types_by_period <- incidents %>%
+  count(period, incident_type) %>%
+  group_by(period) %>%
+  mutate(percent = round(100 * n / sum(n), 1)) %>%
+  ungroup()
+
+types_by_period
+write_csv(types_by_period, file.path(datadir, "types-by-period.csv"))
+
+ggplot(types_by_period, aes(x = period, y = percent, fill = incident_type)) +
+  geom_col() +
+  scale_x_discrete(labels = function(x) str_wrap(x, 18)) +
+  labs(title = "Reported incidents by type, in each period",
+       x = NULL, y = "Percent of incidents", fill = "Type") +
+  theme_minimal()
+```
+
+```{r}
+#| label: actions-by-period
+#| eval: !expr has_incidents
+
+actions_by_period <- incidents %>%
+  count(period, police_action) %>%
+  pivot_wider(names_from = police_action, values_from = n, values_fill = 0)
+
+actions_by_period
+write_csv(actions_by_period, file.path(datadir, "police-actions-by-period.csv"))
+```
+
+::: {.callout-tip}
+## Your turn
+
+Does the share of `detention` rise after September 1959, as your 1960 article claims? Does the share of `fight` and `murder` fall? Remember that your sample decides what you can see: compare periods only if you sampled them the same way.
+:::
+
+Which societies were named, and when?
+
+```{r}
+#| label: societies
+#| eval: !expr has_incidents
+
+incidents %>%
+  filter(!is.na(society_named)) %>%
+  count(society_named, period, sort = TRUE)
+```
+
+And your secondary question, about students:
+
+```{r}
+#| label: students
+#| eval: !expr has_incidents
+
+incidents %>% count(period, involves_students)
+```
+
+## 7. The geography of incidents
+
+### Find coordinates for your places
+
+`tidygeocoder` sends each place name to **OpenStreetMap's** geocoder (Nominatim), which, unlike the Census geocoder you used in Exercise 6, covers Singapore. It asks for one place per second, as OpenStreetMap's rules require, and it needs no key.
+
+The results are saved in `data/tan/places.csv`, and **only places that aren't in that file yet are sent**. So when you add incidents, only the new places are geocoded.
+
+```{r}
+#| label: geocode
+#| eval: !expr has_incidents
+
+all_places <- incidents %>%
+  filter(!is.na(place_text)) %>%
+  distinct(place_text)
+
+if (file.exists(places_file)) {
+  places <- read_csv(places_file, col_types = cols(.default = col_character()))
+} else {
+  places <- tibble(place_text = character(), query = character(),
+                   lat = character(), long = character(),
+                   manual_lat = character(), manual_long = character(), place_note = character())
+}
+
+new_places <- all_places %>% filter(!(place_text %in% places$place_text))
+
+if (nrow(new_places) > 0) {
+  message("Geocoding ", nrow(new_places), " new places...")
+  geocoded <- new_places %>%
+    mutate(query = paste0(place_text, ", Singapore")) %>%
+    geocode(address = query, method = "osm", lat = lat, long = long) %>%
+    mutate(lat = as.character(lat), long = as.character(long),
+           manual_lat = NA_character_, manual_long = NA_character_, place_note = NA_character_)
+  places <- bind_rows(places, geocoded)
+  write_csv(places, places_file)
+}
+
+# places the geocoder couldn't find
+places %>% filter(is.na(lat) & is.na(manual_lat))
+```
+
+::: {.callout-warning}
+## Places that have changed
+
+Many 1950s places are gone: kampongs were cleared, streets renamed, coastlines moved by land reclamation. The geocoder finds **today's** places, and it may put a vanished kampong at a modern street with a similar name, or not find it at all.
+
+For each place it can't find, or finds wrongly, look it up on a historical map and type its coordinates into the `manual_lat` and `manual_long` columns of `data/tan/places.csv`, with your source in `place_note`. The National Library's and National Archives' historical maps of Singapore are a good place to start. Manual coordinates always win over the geocoder's.
+:::
+
+```{r}
+#| label: join-places
+#| eval: !expr has_incidents
+
+places <- places %>%
+  mutate(map_lat  = as.numeric(coalesce(manual_lat, lat)),    # manual first, if you typed one
+         map_long = as.numeric(coalesce(manual_long, long)))
+
+incidents_mapped <- incidents %>%
+  left_join(places %>% select(place_text, map_lat, map_long), by = "place_text") %>%
+  filter(!is.na(map_lat))
+
+nrow(incidents_mapped)   # incidents with coordinates
+```
+
+### Map incidents by period
+
+Each period is its own layer, so you can switch periods on and off in the top-right corner and watch the geography change. Click a dot to see the incident and a link to the article.
+
+```{r}
+#| label: map
+#| eval: !expr has_incidents
+
+incidents_mapped <- incidents_mapped %>%
+  mutate(popup = str_glue(
+    "<b>{incident_date}</b>: {incident_type}<br>",
+    "{htmltools::htmlEscape(place_text)} ({htmltools::htmlEscape(area)})<br>",
+    "Police: {police_action}<br>",
+    "<a href='{article_url}' target='_blank'>{htmltools::htmlEscape(headline)}</a>"
+  ))
+
+type_colors <- colorFactor("Dark2", domain = incidents_mapped$incident_type)
+
+incident_map <- leaflet() %>%
+  addProviderTiles(providers$CartoDB.Positron)
+
+for (this_period in levels(incidents$period)) {
+  period_rows <- incidents_mapped %>% filter(period == this_period)
+  if (nrow(period_rows) == 0) next   # no mapped incidents in this period
+  incident_map <- incident_map %>%
+    addCircleMarkers(data = period_rows, lng = ~map_long, lat = ~map_lat,
+                     radius = 6, stroke = FALSE, fillOpacity = 0.8,
+                     color = ~type_colors(incident_type),
+                     popup = ~popup, group = this_period)
+}
+
+incident_map <- incident_map %>%
+  addLegend(pal = type_colors, values = incidents_mapped$incident_type, title = "Incident type") %>%
+  addLayersControl(overlayGroups = levels(incidents$period),
+                   options = layersControlOptions(collapsed = FALSE))
+
+incident_map
+```
+
+```{r}
+#| label: save-map
+#| eval: !expr has_incidents
+
+htmlwidgets::saveWidget(incident_map, file.path(outdir, "incident-map.html"))
+unlink(file.path(outdir, "incident-map_files"), recursive = TRUE)
+```
+
+Your `area` column lets you count without coordinates. Where were incidents reported, period by period?
+
+```{r}
+#| label: areas
+#| eval: !expr has_incidents
+
+areas_by_period <- incidents %>%
+  count(area, period) %>%
+  pivot_wider(names_from = period, values_from = n, values_fill = 0)
+
+areas_by_period
+write_csv(areas_by_period, file.path(datadir, "areas-by-period.csv"))
+```
+
+## 8. Check your work
+
+Before you use this data in your project:
+
+- [ ] **Sampling.** You've written down your sampling rule (which months, which terms) and followed it for every year.
+- [ ] **Clean codes.** The checks in Section 5 return empty tables.
+- [ ] **Landmarks.** The articles from your Close Reading are in your dataset: the 1958 report on schools, the 1960 report of falling crime since October 1959, and the 1964 arrest of a Sar Ji "headman."
+- [ ] **Places.** Every place has coordinates, and you've checked the ones the geocoder found against a historical map.
+- [ ] **Privacy.** No personal names anywhere in `data/tan/` or `output/tan/`.
+- [ ] **Commit.** This `.qmd` file, `data/tan/`, and `output/tan/` are committed. `private/` is not.
+
+## Thinking like a historian about this pipeline
+
+Every step here **shapes what you find**, and your project should say so.
+
+- **You're measuring reported incidents, not incidents.** The press reported what the police announced and what the courts heard. A rise in reported raids can mean more raids, more announcements, or more press interest.
+
+- **The sources speak for the state.** Almost every voice in these articles is a police officer, a magistrate, or a minister. Record what they said, but keep your own words separate from theirs. Members' voices are missing, as your Close Reading noticed.
+
+- **Labels are evidence.** "Secret society," "gangster," "samseng," "hoodlum": the words the press used, and when they used them, are part of your question. Officials at the time often blurred students, communists, and secret societies together. Your `involves_students` column lets you see when.
+
+- **Your codebook is an argument.** The categories in `incident_type` are yours. Report them, and say what didn't fit.
+
+- **Maps show today's coordinates.** A dot for a 1957 kampong is your best estimate of a place that may no longer exist. Say how you located each place.
+
+- **Sampling shapes everything.** One month a year is a sample. Results that hold across different months are stronger than results from one.
+
+## Exploratory Data Analysis
+
+### Check the packaging
+
+> **Peng:** Before opening the wrapped "present," shake the box: how many rows and columns are there? And do they match what you expected? ([Peng, "Check the packaging"](https://bookdown.org/rdpeng/exdata/exploratory-data-analysis-checklist.html#check-the-packaging))
+
+```{r}
+#| label: eda-packaging
+#| eval: !expr has_incidents
+
+nrow(incidents)
+ncol(incidents)
+```
+
+### Run `str()`
+
+> **Peng:** `str()` shows the class of every column. Make sure numbers are numbers, dates are dates, and text is text. ([Peng, "Run str()"](https://bookdown.org/rdpeng/exdata/exploratory-data-analysis-checklist.html#run-str))
+
+```{r}
+#| label: eda-str
+#| eval: !expr has_incidents
+
+str(incidents)
+```
+
+We read every column as text, then made `incident_date` a date in Section 5. `people_involved` is still text. If you want to add up people, convert it with `as.numeric()`, and check which rows turn into `NA` ("about 20," "several").
+
+### Check your "n"s
+
+> **Peng:** Count things, and compare the counts with *landmarks*: numbers you know should be true. If you expect 1,000 people and find 20, something's wrong. ([Peng, "Check your 'n's"](https://bookdown.org/rdpeng/exdata/exploratory-data-analysis-checklist.html#check-your-ns))
+
+Your landmarks are your sampling plan: every sampled month should have incidents, and you know roughly how many articles you read for each.
+
+```{r}
+#| label: eda-ns
+#| eval: !expr has_incidents
+
+incidents %>%
+  mutate(month = format(incident_date, "%Y-%m")) %>%
+  count(month)
+
+incidents %>% count(newspaper, sort = TRUE)
+```
+
+If a sampled month has no incidents, was it a quiet month, or did your search miss it?
+
+### A first experiment: the press's vocabulary
+
+How did headlines name the societies and their members? The loop counts the incidents whose **headline** uses each label, in each year.
+
+```{r}
+#| label: eda-vocabulary
+#| eval: !expr has_incidents
+#| fig-width: 10
+#| fig-height: 5
+
+headline_labels <- c("secret society", "gang", "gangster", "samseng", "thug", "hoodlum", "triad", "youth", "student")
+
+label_counts <- tibble()
+
+for (label in headline_labels) {
+  this_label <- incidents %>%
+    mutate(uses_label = str_detect(str_to_lower(headline), paste0("\\b", label))) %>%
+    group_by(year) %>%
+    summarize(label = label, headlines = sum(uses_label, na.rm = TRUE))
+  label_counts <- bind_rows(label_counts, this_label)
+}
+
+label_counts %>%
+  filter(headlines > 0) %>%
+  ggplot(aes(x = year, y = headlines, fill = label)) +
+  geom_col() +
+  geom_vline(data = milestones, aes(xintercept = year), linetype = "dashed", color = "grey60") +
+  labs(title = "Labels used in the headlines of your incidents",
+       x = NULL, y = "Headlines", fill = "Label") +
+  theme_minimal()
+```
+
+Now let the headlines suggest words. These are the most common words in your headlines, period by period:
+
+```{r}
+#| label: eda-headline-words
+#| eval: !expr has_incidents
+
+incidents %>%
+  unnest_tokens(word, headline) %>%
+  anti_join(stop_words, by = "word") %>%
+  filter(!str_detect(word, "\\d")) %>%
+  count(period, word, sort = TRUE) %>%
+  group_by(period) %>%
+  slice_max(n, n = 8, with_ties = FALSE)
+```
+
+::: {.callout-tip}
+## Your turn
+
+Does the language change when the government changes in 1959, or after independence? Do "youth" and "student" appear in the same years as "secret society"? Write down two or three ideas. They're the start of your Method Selection assignment.
+:::

@@ -1,0 +1,909 @@
+---
+title: "HIST 446 The Past as Data: Final Project Workspace"
+subtitle: "Student: Aaron Tanglertpaibul"
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    code-copy: true
+    embed-resources: true
+execute:
+  warning: false
+  cache: false
+---
+
+## Getting Started (November 11, 2026)
+
+Aaron,
+
+You have a folder of iPhone photos (`.HEIC`) of exhibit text from museums in Türkiye, South Korea, Vietnam, and Taiwan, written in English, Turkish, Korean, Vietnamese, French, and Chinese. Your research question asks how museums that memorialize violent pasts present those pasts to the audiences they have in mind. Your Close Reading already found one kind of evidence for that: **translation**. At the July 15 museum, the displays are only in Turkish, while the videos about the coup attempt have English subtitles. Which panels a museum translates, and for whom, tells you who it is talking to.
+
+In this workspace, you will turn those photos into a dataset you can analyze. By the time you push this back to GitHub, you will have:
+
+1. **Each photo's metadata** (when it was taken, and where if location was on), saved as a CSV, with every photo matched to its **museum**.
+2. **The text in each photo**, extracted with OCR (optical character recognition) through **Tesseract**, reading the languages of the country where you took it.
+3. **The languages on each panel**: which panels have an English version and which don't, museum by museum.
+4. **English translations** of the non-English text, produced with the **DeepL** API.
+5. **One English text per panel for analysis**, so that a panel printed in two languages isn't counted twice. You raised this problem yourself in your Project Overview.
+6. **A first comparison** of what a panel says in the museum's English and what it says in the local language.
+
+The steps below follow the pilot script we went through together and explains what each part does and why. Read the explanation before you run each chunk. The steps run in order, so each chunk needs the ones before it.
+
+## 0. Your project folders
+
+Your work lives in two folders named after you:
+
+- **`data/tanglertpaibul/`** holds your datasets: the sources you download, and every dataset this workspace makes from them (cleaned, processed, counted).
+- **`output/tanglertpaibul/`** holds what you make to show: charts, maps, and your writing.
+
+```
+HIST446-Final-Project/
+├── HIST446-Final-Project.Rproj         ← open this first
+├── README.md                           ← how to get, update and commit the repository
+├── .gitignore                          ← one file for the whole class: don't edit it
+├── Tanglertpaibul_Workspace.qmd        ← this file
+├── ...                                 ← your classmates' workspaces
+├── data/
+│   └── tanglertpaibul/                 ← your datasets: sources, and everything made from them
+│       ├── HEIC/                       ← put your photos here
+│       ├── txt_files/                  ← the OCR text of each photo (created automatically)
+│       ├── museum-labels.csv           ← which museum each visit was (you fill this in)
+│       └── *.csv, *.rds                ← your OCR and translation results (created automatically)
+└── output/
+    └── tanglertpaibul/                 ← your charts, maps and writing (created automatically)
+```
+
+### What stays off GitHub
+
+Your pictures shouldn't go to your public repository on GitHub: the `.gitignore` already keeps `.heic` files and `data/tanglertpaibul/HEIC/` off GitHub. Remember not to edit the `.gitignore` (the `README.md` explains why).
+
+### What to commit
+
+Commit this `.qmd` file, the files in `data/tanglertpaibul/` (your photos are left out automatically), and everything in `output/tanglertpaibul/`.
+
+## 1. One-time installation
+
+You only need to run this chunk once. It is set to `eval: false` so it won't run every time you render the document.
+
+```{r}
+#| label: install
+#| eval: false
+
+install.packages(c(
+  "tesseract",  # OCR engine
+  "magick",     # reading and cleaning up images
+  "exifr",      # reading photo metadata
+  "readr",      # writing CSV and text files
+  "dplyr", "tidyr", "stringr", "purrr",  # data wrangling
+  "cld2",       # guessing what language a line of text is in
+  "deeplr",     # talking to the DeepL translation API
+  "ggplot2", "tidytext", "topicmodels"   # charts and text analysis
+))
+
+# Tesseract comes with English only. Download the other languages on your panels:
+tesseract::tesseract_download("kor")       # Korean
+tesseract::tesseract_download("tur")       # Turkish
+tesseract::tesseract_download("vie")       # Vietnamese
+tesseract::tesseract_download("fra")       # French (the Hanoi museums use it too)
+tesseract::tesseract_download("chi_tra")   # Chinese, traditional characters (Taiwan)
+```
+
+**Check that it worked.** The list below should include `eng`, `kor`, `tur`, `vie`, `fra`, and `chi_tra`. These are the language parameters for the OCR engine.
+
+```{r}
+#| label: check-languages
+#| eval: false
+tesseract::tesseract_info()$available
+```
+
+if any of them are missing, in your Console, run the appropriate line to download them:
+```
+tesseract_download("tur")
+tesseract_download("kor")
+tesseract_download("vie")
+tesseract_download("fra")
+tesseract_download("chi_tra")
+```
+
+::: {.callout-tip}
+## One thing outside R that can be confusing
+
+- **Exifr and Perl.** For certain things, the package `exifr` uses a programming language called Perl instead of R. Macbooks already have Perl. On Windows, if `read_exif()` gives you an error about Perl, install [Strawberry Perl](https://strawberryperl.com) and restart RStudio.
+:::
+
+### Your DeepL API key
+
+DeepL is the tool we will use to translate your OCR text from Turkish and Korean to English. 
+
+1. Create a free **DeepL API** account at deepl.com/pro-api. It must be an *Developer API* account; a regular DeepL subscription won't give you a key.
+2. Copy the key from **Account -> API Keys & Limits -> DeepL API Key**.
+3. Save it where R can find it, **not** in this file. You'll be sharing your code, so you shouldn't leave your key in it. In your Console, run:
+
+```
+usethis::edit_r_environ()
+```
+In the file that opens, add a line like this (no quotes, no spaces), then leave an empty line at the bottom, save, and RESTART R:
+
+DEEPL_KEY=your-key-here
+
+## 2. Load packages and settings
+
+If you're returning to this file at a later time, start here.
+
+```{r}
+#| label: setup
+
+library(tesseract)
+library(magick)
+library(exifr)
+library(readr)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(purrr)
+library(cld2)
+library(deeplr)
+library(tools)
+library(ggplot2)
+library(tidytext)
+
+# ---- settings ----
+datadir    <- "data/tanglertpaibul"            # your datasets
+path       <- file.path(datadir, "HEIC")       # where the photos are
+outdir     <- "output/tanglertpaibul"          # your charts and writing
+txtdir     <- file.path(datadir, "txt_files")
+
+# Which languages Tesseract should look for, by the country where you took the photo.
+# The country comes from the photo's GPS location: a box of latitudes and longitudes.
+# Fewer languages at a time means better OCR, so each country gets only its own.
+ocr_languages <- tribble(
+  ~country,      ~min_lat, ~max_lat, ~min_long, ~max_long, ~langs,
+  "Türkiye",      35,       43,       25,        45,       "eng+tur",
+  "South Korea",  33,       39,      124,       132,       "eng+kor",
+  "Taiwan",       21,       26,      119,       123,       "eng+chi_tra",
+  "Vietnam",       8,       24,      102,       110,       "eng+vie+fra"
+)
+default_langs <- "eng+tur+kor+vie"   # for photos with no location at all
+
+dir.create(txtdir, recursive = TRUE, showWarnings = FALSE)
+dir.create(outdir, recursive = TRUE, showWarnings = FALSE)
+```
+
+## 3. Find the images
+
+`list.files()` makes a list of every file in the folder that ends in `.heic`, `.jpg`, or `.jpeg`. The pattern is a **regular expression**: `\\.` means "a literal dot," `jpe?g` means "jpg or jpeg," and `$` means "at the end of the name." `ignore.case = TRUE` matches both `.HEIC` and `.heic`. `full.names = TRUE` keeps the folder path, which R needs to open each file.
+
+```{r}
+#| label: find-images
+
+images <- list.files(path, pattern = "\\.(heic|jpe?g)$",
+                     ignore.case = TRUE, full.names = TRUE)
+
+length(images)   # how many photos are in the folder?
+
+# only require HEIC support if there are HEIC files to read
+has_heic <- any(grepl("\\.heic$", images, ignore.case = TRUE))
+if (has_heic && !magick_config()$heic) {
+  stop("magick can't read HEIC on this machine; convert those files to JPG first.")
+}
+```
+
+
+## 4. Read the photo metadata and save it as CSV
+
+Every iPhone photo carries hidden **EXIF** metadata: the date and time it was taken, the phone model, and, if Location Services was on for the camera, GPS coordinates. `read_exif()` pulls out the tags we ask for.
+
+Two details matter here:
+
+- **Missing tags.** A photo taken with location turned off has no GPS tags at all, so those columns won't exist in the table. The `for` loop adds any missing column filled with `NA`, so the table always has the same columns.
+- **North/south and east/west.** GPS stores the number and the direction separately: `GPSLatitude = 41.0` plus `GPSLatitudeRef = "N"`. Mapping software expects south latitudes and west longitudes to be negative, so we apply the sign ourselves. Korea and Turkey are both north and east, so their values stay positive.
+
+```{r}
+#| label: metadata
+
+meta_tags <- c("DateTimeOriginal", "OffsetTimeOriginal",
+               "GPSLatitude", "GPSLatitudeRef",
+               "GPSLongitude", "GPSLongitudeRef",
+               "GPSAltitude", "Make", "Model")
+
+meta <- read_exif(images, tags = c("SourceFile", meta_tags))
+
+# photos with no location data lack these columns, so add any that are missing
+for (col in meta_tags) {
+  if (!col %in% names(meta)) meta[[col]] <- NA
+}
+
+meta <- meta %>%
+  mutate(
+    GPSLatitude  = if_else(GPSLatitudeRef  %in% "S", -abs(GPSLatitude),  GPSLatitude),
+    GPSLongitude = if_else(GPSLongitudeRef %in% "W", -abs(GPSLongitude), GPSLongitude),
+    date_taken   = as.Date(substr(DateTimeOriginal, 1, 10), format = "%Y:%m:%d")
+  ) %>%
+  select(SourceFile, date_taken, DateTimeOriginal, OffsetTimeOriginal,
+         GPSLatitude, GPSLongitude, GPSAltitude, Make, Model)
+
+write_excel_csv(meta, file.path(datadir, "metadata.csv"))
+meta
+```
+
+`DateTimeOriginal` is the camera's **local** time. `OffsetTimeOriginal` (e.g., `+09:00` in Korea, `+03:00` in Turkey) tells you which time zone that was.
+
+::: {.callout-tip}
+## Why `write_excel_csv()` and not `write_csv()`?
+
+Both write the same CSV. `write_excel_csv()` adds a small marker at the start of the file that tells Excel the text is UTF-8. Without it, Excel shows Korean and Turkish characters (한국어, ş, ğ, ı) as garbled symbols.
+:::
+
+### Fill in missing locations
+
+Your Close Reading explains that some photos, especially from your older phone, have no location, but you know where they were taken from the photos around them. The chunk below does the same thing: a photo with no location gets the location of the photo taken just before it on the same day (or just after it, if it's the first of the day). `location_filled` marks those photos, so you can always tell an observed location from a borrowed one. Photos from a day with no location at all stay empty.
+
+```{r}
+#| label: fill-locations
+
+meta <- meta %>%
+  arrange(DateTimeOriginal) %>%
+  mutate(location_filled = is.na(GPSLatitude)) %>%
+  group_by(date_taken) %>%
+  fill(GPSLatitude, GPSLongitude, .direction = "downup") %>%   # borrow from the nearest photo that day
+  ungroup() %>%
+  mutate(location_filled = location_filled & !is.na(GPSLatitude))
+
+meta %>% count(has_location = !is.na(GPSLatitude), location_filled)
+```
+
+### Which museum is each photo from?
+
+GPS gives you coordinates, not museum names. But every museum visit leaves the same trace: many photos on one day in one place. The chunk below groups the photos into **visits**: same date, and coordinates rounded to two decimals (about one kilometer). It then creates `data/tanglertpaibul/museum-labels.csv`, with one row per visit and a link to the spot on a map. It only creates the sheet once, so your labels are never overwritten.
+
+```{r}
+#| label: visits
+
+meta <- meta %>%
+  mutate(visit = if_else(is.na(GPSLatitude), NA_character_,
+                         paste(date_taken, round(GPSLatitude, 2), round(GPSLongitude, 2))))
+
+visits <- meta %>%
+  filter(!is.na(visit)) %>%
+  group_by(visit) %>%
+  summarize(date   = first(date_taken),
+            lat    = round(first(GPSLatitude), 4),
+            long   = round(first(GPSLongitude), 4),
+            photos = n(),
+            .groups = "drop") %>%
+  mutate(map = paste0("https://www.google.com/maps?q=", lat, ",", long)) %>%
+  arrange(date)
+
+museum_file <- file.path(datadir, "museum-labels.csv")
+
+if (!file.exists(museum_file)) {
+  visits %>%
+    mutate(museum = "") %>%    # fill in: the museum's name
+    write_excel_csv(museum_file)
+}
+
+visits
+```
+
+::: callout-tip
+## Your turn: name the museums
+
+Open `data/tanglertpaibul/museum-labels.csv` (in RStudio, or in Excel), open each `map` link, and type the museum's name in the `museum` column. Use exactly the same spelling every time you name a museum. If one museum shows up as two visits (a different day, or a different corner of a large site), give both the same name. Save the file and run the next chunk.
+
+This also settles a question from my comments on your Historical Context: which July 15 museum did you photograph, the one in Istanbul or the one in Kahramankazan, near Ankara? The coordinates will tell you.
+:::
+
+Now join the museum names back to the photos, and find each photo's country, which decides the OCR languages in Section 6:
+
+```{r}
+#| label: museums
+
+museum_labels <- read_csv(museum_file, show_col_types = FALSE) %>%
+  select(visit, museum)
+
+meta <- meta %>%
+  select(-any_of("museum")) %>%
+  left_join(museum_labels, by = "visit") %>%
+  mutate(museum = if_else(is.na(museum) | museum == "", "unknown", museum))
+
+meta$country   <- NA_character_
+meta$ocr_langs <- NA_character_
+for (i in seq_len(nrow(ocr_languages))) {
+  in_country <- (meta$GPSLatitude  >= ocr_languages$min_lat[i]  & meta$GPSLatitude  <= ocr_languages$max_lat[i] &
+                 meta$GPSLongitude >= ocr_languages$min_long[i] & meta$GPSLongitude <= ocr_languages$max_long[i]) %in% TRUE
+  meta$country[in_country]   <- ocr_languages$country[i]
+  meta$ocr_langs[in_country] <- ocr_languages$langs[i]
+}
+meta$ocr_langs[is.na(meta$ocr_langs)] <- default_langs
+
+write_excel_csv(meta, file.path(datadir, "metadata.csv"))
+
+meta %>% count(country, museum)
+```
+
+## 5. Prepare each image for OCR
+
+OCR is much more accurate on clean, upright, high-contrast images. `prep_image()` does three things to each photo before Tesseract reads it:
+
+- `image_orient()` rotates the image upright. iPhones often save photos sideways and only record the correct rotation as a tag in the metadata. Tesseract ignores that tag, so without this step it would try to read sideways text.
+- `image_convert(colorspace = "gray")` drops the color. Tesseract only needs light and dark.
+- `image_resize("2000x")` scales the image to 2000 pixels wide, with height adjusted to match. iPhone photos are larger than Tesseract needs, and this makes OCR faster without hurting accuracy.
+
+```{r}
+#| label: prep-function
+
+prep_image <- function(fullpath) {
+  image_read(fullpath) %>%
+    image_orient() %>%
+    image_convert(colorspace = "gray") %>%
+    image_resize("2000x")
+}
+```
+
+**Try it on one photo** to see what Tesseract will see:
+
+```{r}
+#| label: preview
+#| eval: false
+prep_image(images[1])
+```
+
+## 6. Run OCR on every image
+
+### Choosing the language engine
+
+Tesseract can look for several languages at once, like `"eng+kor"`: it tries each one and keeps whichever fits each word best. But every extra language is one more way to misread a word, so each photo gets only the languages of the country where you took it: `ocr_langs`, from Section 4. A photo from Busan is read as English and Korean, and a photo from Hanoi as English, Vietnamese, and French. You can change these in the settings (Section 2).
+
+::: {.callout-warning}
+## Create the engine in the same chunk you use it
+`tesseract()` returns a live connection to the OCR engine, not ordinary data. If R restarts, or the engine gets saved and reloaded, it stops working with the error **`pointer is dead`**. The fix is to create the engine right before you use it, as below. Don't turn on chunk caching for this chunk. The loop keeps one engine for each set of languages, and creates it the first time a photo needs it.
+:::
+
+### The loop
+
+Below, a `for` loop (from your third Worksheet) repeats the same steps for every photo. The steps are:
+
+1. Get the file's name without the extension, so `IMG_0412.HEIC` becomes `IMG_0412`, and the photo's languages from `meta`.
+2. Prepare the image and run OCR, inside `tryCatch()`. If one photo fails (it's corrupt, say), `tryCatch()` reports the error and records `NA` for that photo instead of stopping the whole loop.
+3. Save the text as a `.txt` file, so you have a plain-text copy of every photo's text.
+
+We also **save the results** to `data/tanglertpaibul/ocr_raw.rds`. The next time you run this chunk, only *new* photos are processed, so adding five more photos doesn't mean re-reading all of them.
+
+```{r}
+#| label: ocr
+
+engines   <- list()     # one OCR engine per set of languages, created when first needed
+ocr_cache <- file.path(datadir, "ocr_raw.rds")
+
+# load earlier results if they exist; otherwise start an empty table
+ocr_df <- if (file.exists(ocr_cache)) {
+  readRDS(ocr_cache)
+} else {
+  tibble(SourceFile = character(), ocr_langs = character(), text = character())
+}
+
+todo <- setdiff(images, ocr_df$SourceFile)   # photos not yet OCR'd
+message(length(todo), " new image(s) to OCR")
+
+for (fullpath in todo) {
+  filename <- file_path_sans_ext(basename(fullpath))
+  langs    <- meta$ocr_langs[meta$SourceFile == fullpath][1]
+  if (is.na(langs)) langs <- default_langs
+  if (is.null(engines[[langs]])) engines[[langs]] <- tesseract(langs)
+  message("OCR: ", filename, " (", langs, ")")
+
+  result <- tryCatch(
+    ocr(prep_image(fullpath), engine = engines[[langs]]),
+    error = function(e) {
+      message("  failed: ", conditionMessage(e))
+      NA_character_
+    }
+  )
+
+  if (!is.na(result)) {
+    write_file(result, file.path(txtdir, paste0(filename, ".txt")))
+  }
+
+  ocr_df <- bind_rows(ocr_df, tibble(SourceFile = fullpath, ocr_langs = langs, text = result))
+}
+```
+
+Remember to save results as cache to avoid reruns. Then, store results in a dataframe format:
+```{r}
+saveRDS(ocr_df, ocr_cache)
+# keep only photos that are still in the folder
+
+ocr_df <- ocr_df %>% filter(SourceFile %in% images)
+```
+
+Use the chunk below to peek at some of the results. Change the row number from **1** to any other you want to check:
+```{r}
+ocr_df$text[1]
+```
+
+::: {.callout-note}
+## Starting over
+
+If you change `ocr_languages` or `prep_image()`, delete `data/tanglertpaibul/ocr_raw.rds` and run this chunk again. Otherwise R will reuse the old results.
+:::
+
+## 7. Sort every line by language
+
+A single photo might contain several languages: a Vietnamese caption, an English translation, and a French one on the same panel. DeepL works best when it knows what language it is translating *from*. It also doesn't need to see the English, which would only use up characters. So we split each photo's text into lines and label each line.
+
+The rules:
+
+| If the line… | Label |
+|--------------|-------|
+| contains any Korean (Hangul) characters | `KO` |
+| contains Japanese kana | `JA` |
+| contains Chinese characters | `ZH` |
+| contains Thai characters | `TH` |
+| contains a letter that only Vietnamese uses: **ă, đ, ơ, ư**, or a vowel with a tone mark like **ạ, ế, ộ** | `VI` |
+| contains a letter that only Turkish uses: **ğ, ı, İ, ş** | `TR` |
+| is identified as Turkish, Vietnamese, or French by `cld2::detect_language()` | `TR`, `VI`, or `FR` |
+| none of the above, and most of its words (at least two) are English words | `EN` |
+| none of the above | `unreadable` |
+
+`\\p{Hangul}` is a regular expression meaning "any Hangul character." It works no matter which Korean font was used. `\\p{Han}`, `\\p{Hiragana}`, `\\p{Katakana}`, and `\\p{Thai}` work the same way for Chinese characters, Japanese, and Thai. The order matters: Korean comes before Chinese, because some Korean panels use Chinese characters too.
+
+We also drop **noise**: lines with fewer than three letters, or lines that are mostly symbols. When Tesseract hits a smudge, a photo edge, or a logo, it often produces junk like `|| ~ :.` and those lines aren't worth keeping or translating.
+
+Some junk is made of letters, though: a photo of an object, or Korean read with the wrong language, can come out as `a met Sadi oe Aaoas`. Without a check, those lines would be labeled English, and your count of English panels would be too high. So a line only counts as English if at least two of its words, and at least 60% of them, are in an English word list (`parts_of_speech`, from the `tidytext` package). Words shorter than three letters don't count either way. Lines that fail every test are labeled `unreadable` and set aside.
+
+```{r}
+#| label: split-lines
+
+lines_df <- ocr_df %>%
+  filter(!is.na(text)) %>%
+  mutate(line = str_split(text, "\n")) %>%
+  select(SourceFile, line) %>%
+  unnest(line) %>%
+  mutate(line = str_squish(line)) %>%
+  group_by(SourceFile) %>%
+  mutate(line_no = row_number()) %>%
+  ungroup() %>%
+  # --- remove OCR noise ---
+  mutate(n_letters    = str_count(line, "\\p{L}"),
+         letter_share = n_letters / pmax(str_count(line, "\\S"), 1)) %>%
+  filter(n_letters >= 3, letter_share >= 0.5) %>%
+  mutate(line_id = row_number())
+
+# --- what share of each line's words are English words? ---
+english_words <- unique(str_to_lower(parts_of_speech$word))
+
+english_share <- lines_df %>%
+  select(line_id, line) %>%
+  unnest_tokens(word, line) %>%
+  filter(str_detect(word, "^[a-z']{3,}$")) %>%
+  mutate(is_english = word %in% english_words | str_remove(word, "s$") %in% english_words) %>%  # plurals too
+  group_by(line_id) %>%
+  summarize(english_words = sum(is_english),
+            english_share = mean(is_english), .groups = "drop")
+
+lines_df <- lines_df %>%
+  left_join(english_share, by = "line_id") %>%
+  mutate(english_words = replace_na(english_words, 0),
+         english_share = replace_na(english_share, 0)) %>%
+  # --- label the language of each line ---
+  mutate(lang = case_when(
+    str_detect(line, "\\p{Hangul}")                  ~ "KO",
+    str_detect(line, "\\p{Hiragana}|\\p{Katakana}")  ~ "JA",
+    str_detect(line, "\\p{Han}")                     ~ "ZH",
+    str_detect(line, "\\p{Thai}")                    ~ "TH",
+    str_detect(line, "[ăĂđĐơƠưƯạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹ]") ~ "VI",
+    str_detect(line, "[ğĞıİşŞ]")                     ~ "TR",
+    detect_language(line) %in% "tr"                  ~ "TR",
+    detect_language(line) %in% "vi"                  ~ "VI",
+    detect_language(line) %in% "fr"                  ~ "FR",
+    english_words >= 2 & english_share >= 0.6         ~ "EN",
+    TRUE                                             ~ "unreadable"
+  )) %>%
+  select(SourceFile, line_no, lang, line)
+
+# save for checking by hand, unreadable lines included
+write_excel_csv(lines_df, file.path(datadir, "lines_by_language.csv"))
+
+count(lines_df, lang)
+
+# set the unreadable lines aside
+lines_df <- lines_df %>% filter(lang != "unreadable")
+```
+
+Next we join each photo's lines back together, **one block per language per photo**. Translating a whole block, rather than line by line, gives DeepL context, which produces better translations.
+
+```{r}
+#| label: blocks
+
+blocks <- lines_df %>%
+  arrange(SourceFile, line_no) %>%
+  group_by(SourceFile, lang) %>%
+  summarise(text = paste(line, collapse = "\n"), .groups = "drop")
+
+blocks
+```
+
+### Which languages does each panel use?
+
+This is the first finding your question needs. For every photo, list the languages found on it, and whether one of them is English:
+
+```{r}
+#| label: panel-languages
+
+panel_languages <- lines_df %>%
+  group_by(SourceFile) %>%
+  summarize(languages   = paste(sort(unique(lang)), collapse = "+"),
+            has_english = "EN" %in% lang,
+            lines       = n(),
+            .groups = "drop") %>%
+  left_join(meta %>% select(SourceFile, museum), by = "SourceFile")
+
+write_excel_csv(panel_languages, file.path(datadir, "panel-languages.csv"))
+
+panel_languages %>% count(museum, languages, sort = TRUE)
+```
+
+What share of each museum's panels has an English version?
+
+```{r}
+#| label: english-share
+#| fig-width: 8
+#| fig-height: 4
+
+english_share <- panel_languages %>%
+  group_by(museum) %>%
+  summarize(panels = n(),
+            percent_with_english = round(100 * mean(has_english)))
+
+english_share
+
+ggplot(english_share, aes(x = percent_with_english, y = reorder(museum, percent_with_english))) +
+  geom_col(fill = "grey40") +
+  labs(title = "Panels with an English version, by museum",
+       x = "Percent of photographed panels", y = NULL) +
+  theme_minimal()
+
+ggsave(file.path(outdir, "english-by-museum.png"), width = 8, height = 4)
+```
+
+::: callout-warning
+## Read these numbers as a photographer, too
+
+These are the panels **you photographed**, and only those where OCR found at least one readable line, not every panel in the museum. If you photographed the English side of a sign and not the other side, or skipped panels you couldn't read, the shares reflect that. Say so in your writing. Also check a few labels by hand: OCR that misreads Korean as nonsense can make a line look like English.
+:::
+
+## 8. Translate the non-English text with DeepL
+
+### Connect to DeepL
+
+Free DeepL keys end in `:fx` and use a different web address than paid keys. The `deeplr` package has two sets of functions to match: `translate2()` for free keys and `translate()` for paid ones. Using the wrong one gives an **"Authorization failed"** error, so we pick the right one automatically.
+
+```{r}
+#| label: deepl-connect
+
+deepl_key <- Sys.getenv("DEEPL_KEY")
+if (!nzchar(deepl_key)) {
+  stop("DEEPL_KEY not found. Add it to .Renviron (Section 1) and restart R.")
+}
+
+free_key        <- endsWith(deepl_key, ":fx")
+deepl_translate <- if (free_key) deeplr::translate2 else deeplr::translate
+deepl_usage     <- if (free_key) deeplr::usage2     else deeplr::usage
+
+deepl_usage(deepl_key)   # characters used so far, and your limit
+```
+
+### Check the cost first
+
+DeepL counts **every character you send**, including spaces. Each Hangul syllable (한) counts as one character. Before translating, we check how much is new.
+
+Translations are saved in `data/tanglertpaibul/translation_cache.rds`. Anything already translated is skipped, so re-running or re-rendering this document costs **nothing** unless there's new text.
+
+With thousands of photos, translating everything could use up the free plan's monthly limit. So the chunk translates only what you need:
+
+- **every panel with no English version**, because otherwise you can't read it, and
+- **a sample of bilingual panels** (`compare_sample` of them), for the experiment at the end of this workspace, where you compare the museum's English with the local-language text.
+
+Raise `compare_sample` later if you have characters to spare.
+
+```{r}
+#| label: deepl-budget
+
+cache_file <- file.path(datadir, "translation_cache.rds")
+
+cache <- if (file.exists(cache_file)) {
+  readRDS(cache_file)
+} else {
+  tibble(lang = character(), text = character(), translation = character())
+}
+
+compare_sample <- 30   # how many bilingual panels to translate for comparison
+
+set.seed(446)
+bilingual_sample <- panel_languages %>%
+  filter(has_english, languages != "EN") %>%
+  slice_sample(n = compare_sample) %>%
+  pull(SourceFile)
+
+needs_translation <- panel_languages %>%
+  filter(!has_english | SourceFile %in% bilingual_sample) %>%
+  pull(SourceFile)
+
+to_translate <- blocks %>%
+  filter(lang != "EN", SourceFile %in% needs_translation) %>%
+  distinct(lang, text) %>%
+  anti_join(cache, by = c("lang", "text"))   # drop anything already translated
+
+message(nrow(to_translate), " new block(s), ",
+        sum(nchar(to_translate$text)), " characters to translate")
+```
+
+### Translate
+
+The loop sends one block at a time. It tells DeepL the source language (`KO`, `TR`, `VI`, and so on) and asks for English (`EN`). **After each successful translation, it saves the cache.** If your internet drops, or you hit your limit halfway through, nothing you've already paid for is lost. Just run the chunk again and it picks up where it stopped.
+
+```{r}
+#| label: translate
+
+for (i in seq_len(nrow(to_translate))) {
+  src <- to_translate$lang[i]
+  txt <- to_translate$text[i]
+  message("Translating block ", i, " of ", nrow(to_translate), " (", src, ")")
+
+  result <- tryCatch(
+    deepl_translate(txt, target_lang = "EN", source_lang = src,
+                    auth_key = deepl_key),
+    error = function(e) {
+      message("  failed: ", conditionMessage(e))
+      NA_character_
+    }
+  )
+
+  if (!is.na(result[1])) {
+    cache <- bind_rows(cache,
+                       tibble(lang = src, text = txt,
+                              translation = paste(result, collapse = "\n")))
+    saveRDS(cache, cache_file)
+  }
+  Sys.sleep(0.2)   # a short pause so we don't flood the API
+}
+```
+
+## 9. Build the final table and save it
+
+Now we put it all together with **one row per photo**:
+
+- `museum` and `languages`: where the photo is from, and the languages on the panel
+- `text_en`: the lines that were already in English
+- `text_tr`, `text_ko`: the original Turkish and Korean lines
+- `tr_to_en`, `ko_to_en`: their DeepL translations
+- `text_native`, `native_to_en`: every non-English line (in any language), and its DeepL translation
+- `english_all`: everything in English in one column, for searching
+- `text_for_analysis`: **one** English version of each panel: the museum's own English if the panel has it, and the DeepL translation if it doesn't. Use this column for counting words, so a bilingual panel isn't counted twice. `analysis_source` says which one it is.
+- the metadata from Section 6
+- `ocr_raw`: Tesseract's unedited output, so you can always go back to the source
+
+```{r}
+#| label: final-table
+
+per_image <- blocks %>%
+  left_join(cache, by = c("lang", "text")) %>%
+  group_by(SourceFile) %>%
+  summarise(
+    text_en  = paste(text[lang == "EN"],        collapse = "\n"),
+    text_tr  = paste(text[lang == "TR"],        collapse = "\n"),
+    text_ko  = paste(text[lang == "KO"],        collapse = "\n"),
+    tr_to_en = paste(na.omit(translation[lang == "TR"]), collapse = "\n"),
+    ko_to_en = paste(na.omit(translation[lang == "KO"]), collapse = "\n"),
+    languages    = paste(sort(unique(lang)), collapse = "+"),
+    text_native  = paste(text[lang != "EN"], collapse = "\n"),
+    native_to_en = paste(na.omit(translation[lang != "EN"]), collapse = "\n"),
+    .groups  = "drop"
+  ) %>%
+  mutate(english_all = paste(text_en, native_to_en, sep = "\n") %>%
+           str_replace_all("\n{2,}", "\n") %>%
+           str_trim(),
+         # one English version per panel: the museum's own if it has one
+         text_for_analysis = if_else(text_en != "", text_en, native_to_en),
+         analysis_source   = case_when(text_en != ""      ~ "museum's English",
+                                       native_to_en != "" ~ "DeepL translation",
+                                       TRUE               ~ "none"))
+
+results_per_image <- ocr_df %>%
+  rename(ocr_raw = text) %>%
+  left_join(meta %>% select(-ocr_langs), by = "SourceFile") %>%   # ocr_df already records the languages used
+  left_join(per_image, by = "SourceFile") %>%
+  mutate(filename = file_path_sans_ext(basename(SourceFile))) %>%
+  relocate(filename, museum, languages, date_taken, GPSLatitude, GPSLongitude,
+           text_for_analysis, analysis_source, english_all,
+           text_en, text_tr, tr_to_en, text_ko, ko_to_en, text_native, native_to_en) %>%
+  relocate(ocr_raw, SourceFile, .after = last_col())
+
+results_per_image <- separate_wider_delim(results_per_image, date_taken, "-", names = c("year", "month", "day"), cols_remove = FALSE)
+
+write_excel_csv(results_per_image, file.path(datadir, "ocr_translation_metadata.csv"))
+results_per_image
+```
+
+
+```{r}
+results_per_block <- blocks %>%
+  left_join(cache, by = c("lang", "text")) %>%
+  left_join(meta, by = "SourceFile") %>%
+  group_by(SourceFile) %>%
+  mutate(translation = ifelse(is.na(translation), text, translation)) %>%
+  ungroup()
+
+results_per_block 
+```
+
+## 10. Check your work
+
+Before you use this data in your project:
+
+- [ ] **Row count.** `nrow(results_per_image)` should equal the number of photos. Any photo with an empty `ocr_raw` failed OCR, so look at it and see why (blurry? text too small? at an angle?).
+- [ ] **Spot-check OCR.** Pick five photos. Open each one next to its `.txt` file in `data/tanglertpaibul/txt_files/`. Did Tesseract get the words right?
+- [ ] **Spot-check translations.** Paste a few `text_ko` or `text_tr` blocks into the DeepL website or Papago and compare the results. Do proper nouns (people, places, institutions) come through correctly?
+- [ ] **Map check.** Do the GPS coordinates land where you took the photos? A quick test: paste `GPSLatitude, GPSLongitude` from one row into Google Maps.
+- [ ] **Museums.** Every visit in `museum-labels.csv` has a museum name, and `meta %>% count(museum)` has no `unknown` photos you could place by hand.
+- [ ] **Languages.** For five photos, the `languages` column matches what you see on the panel.
+
+## Thinking like a historian about this pipeline
+
+Every step here **transforms the source**, and your project should say so.
+
+- **OCR is a form of reading.** Tesseract makes assumptions. It's worse on stylized fonts, vertical Korean text, curved signs, glare, and handwriting. The `ocr_raw` column and the original photo are your evidence. The translation is two steps removed from them.
+
+- **Machine translation is an interpretation.** DeepL picks one meaning when there may be several. It flattens tone and formality, which carry real meaning in Korean especially. It may also mistranslate names, titles, and historical terms. Quote the original next to the translation when a passage matters to your argument.
+
+- **Two versions of a panel are two texts.** A museum's English isn't always a translation of its local-language text. It can be shorter, softer, or leave out names and numbers. Which panels get translated, and how, is a decision about audience, and that's evidence for your question.
+
+- **Metadata documents your own movement, not the past.** `date_taken` and GPS tell you when and where *you* photographed something, not when it was made or where it came from.
+
+- **Document your method.** In your project, note the tools and versions you used (Tesseract with `eng+tur+kor`, DeepL API, and the date you translated). Someone else should be able to reproduce or question your data.
+
+## Exploratory Data Analysis
+
+### Check the packaging
+
+> **Peng:** Before opening the wrapped "present," shake the box: how many rows and columns are there? And do they match what you expected? ([Peng, "Check the packaging"](https://bookdown.org/rdpeng/exdata/exploratory-data-analysis-checklist.html#check-the-packaging))
+
+```{r}
+nrow(results_per_image)
+ncol(results_per_image)
+```
+
+### Run `str()`
+
+> **Peng:** `str()` shows the class of every column. Make sure numbers are numbers, dates are dates, and text is text. ([Peng, "Run str()"](https://bookdown.org/rdpeng/exdata/exploratory-data-analysis-checklist.html#run-str))
+
+```{r}
+str(results_per_image)
+```
+
+```{r}
+results_per_image %>% group_by(results_per_image$date_taken) %>% summarize(count = n())
+```
+```{r}
+length(unique(results_per_image$date_taken))
+```
+
+### 5. Check your "n"s
+
+> **Peng:** Count things, and compare the counts with *landmarks*: numbers you know should be true. If you expect 1,000 people and find 20, something's wrong. ([Peng, "Check your 'n's"](https://bookdown.org/rdpeng/exdata/exploratory-data-analysis-checklist.html#check-your-ns))
+
+```{r}
+long_results <- results_per_image %>%
+  select(date_taken, English = text_en, Turkish = text_tr, Korean = text_ko) %>%
+  pivot_longer(-date_taken, names_to = "language", values_to = "text")
+
+lang_counts <- long_results %>%
+  filter(!is.na(text), text != "") %>%
+  count(date_taken, language) %>%
+  complete(date_taken, language = c("English", "Turkish", "Korean"), fill = list(n = 0))
+
+lang_counts   # one row per date × language, with a column n
+```
+
+```{r}
+ggplot(lang_counts, aes(x = factor(date_taken), y = n, fill = language)) +
+  geom_col(position = "dodge") +
+  labs(title = "Texts captured per language, by date photographed",
+       x = "Date taken", y = "Number of photos with text", fill = "Language") +
+  theme_minimal()
+```
+
+::: callout-note
+## Counting words without counting twice
+
+`english_all` holds the museum's English **and** the DeepL translation of the same panel, so the words of a bilingual panel are counted twice. For word counts and topic models, try `text_for_analysis` instead (Section 9), and compare the results.
+:::
+
+```{r}
+library(topicmodels)
+library(tidytext) 
+
+tokens <- results_per_image %>%
+  select(filename, date_taken, english_all) %>%
+  unnest_tokens(word, english_all)
+
+nrow(tokens)
+```
+
+```{r}
+tokens <- tokens %>%
+  anti_join(stop_words, by = "word") %>%
+  filter(!str_detect(word, "\\d"), !str_detect(word, "eee"),
+         str_length(word) >= 3)
+
+tokens %>% count(word, sort = TRUE)
+```
+
+```{r}
+dtm <- tokens %>%
+  add_count(word, name = "total") %>%
+  count(filename, word) %>%
+  cast_dtm(filename, word, n)
+
+lda <- LDA(dtm, k = 12, control = list(seed = 1))
+
+top_terms <- tidy(lda, matrix = "beta") %>%
+  group_by(topic) %>%
+  slice_max(beta, n = 5, with_ties = FALSE) %>%
+  ungroup()
+
+top_terms %>%
+  mutate(term = reorder_within(term, beta, topic)) %>%
+  ggplot(aes(x = beta, y = term, fill = factor(topic))) +
+  geom_col() +
+  scale_y_reordered() +
+  facet_wrap(~ topic, scales = "free_y", ncol = 3) +
+  labs(title = "Top 5 words in each topic across all pictures",
+       x = "How typical the word is of the topic (beta)", y = NULL)
+```
+
+### A first experiment: do the two versions of a panel say the same thing?
+
+For the bilingual panels you translated (Section 8), you now have two English texts: the **museum's** English, written for foreign visitors, and **DeepL's** translation of what local visitors read. Measure how much they overlap: the share of distinct words (leaving out common words like "the") that appear in both. A score of 1 means the same words; a score near 0 means the two versions say different things, or one says much more than the other.
+
+```{r}
+#| label: compare-versions
+
+both_versions <- results_per_image %>%
+  filter(text_en != "", native_to_en != "") %>%
+  select(filename, museum, languages, text_en, native_to_en)
+
+word_set <- function(text) {
+  words <- str_to_lower(str_extract_all(text, "[A-Za-z']{3,}")[[1]])
+  setdiff(unique(words), stop_words$word)
+}
+
+both_versions$overlap <- NA_real_
+for (i in seq_len(nrow(both_versions))) {
+  museum_words <- word_set(both_versions$text_en[i])
+  deepl_words  <- word_set(both_versions$native_to_en[i])
+  shared       <- length(intersect(museum_words, deepl_words))
+  both_versions$overlap[i] <- round(shared / max(length(union(museum_words, deepl_words)), 1), 2)
+}
+
+both_versions %>%
+  arrange(overlap) %>%
+  select(filename, museum, languages, overlap)
+```
+
+Now read the panel with the lowest overlap, both versions side by side:
+
+```{r}
+#| label: read-versions
+
+lowest <- both_versions %>% arrange(overlap) %>% slice(1)
+
+cat("MUSEUM'S ENGLISH:\n", lowest$text_en, "\n\nDEEPL'S TRANSLATION OF THE LOCAL TEXT:\n", lowest$native_to_en, "\n")
+```
+
+::: callout-tip
+## Your turn
+
+Read three panels with low overlap. Before you blame the museum, rule out OCR: open the photos. Then ask what the local-language version has that the English one doesn't: names, numbers, words like "martyr," "traitor," or "comfort women," or a different tone. Is there a pattern by museum? Write down two or three observations. They're the start of your Method Selection assignment.
+:::
+

@@ -15,6 +15,7 @@ data/cole/raw/
 data/cole/pages/
 # Huneryager: catalog PDFs
 data/huneryager/catalogs/
+data/huneryager/dailynews/
 data/huneryager/catalog-lines.csv
 # Matney: page images and raw API batches
 data/matney/images/
@@ -25,5 +26,10 @@ data/rojas/ipums/
 private/
 # Tanglertpaibul: photos
 data/tanglertpaibul/HEIC/
+data/tanglertpaibul/JPG/
 *.heic
 *.HEIC
+*.jpg
+*.JPG
+*.JPEG
+*.jpeg

@@ -1,0 +1,640 @@
+---
+title: "HIST 446 The Past as Data: Final Project Workspace"
+subtitle: "Student: Makenzie Rojas"
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    code-copy: true
+    embed-resources: true
+execute:
+  warning: false
+  cache: false
+---
+
+## Getting Started (November 12, 2026)
+
+Mak,
+
+Your research question asks how occupations in Smithfield changed between 1850 and 1907. In your Close Reading, you read the Liberty Township census on Ancestry, page by page, and noticed two puzzles: most men were "farmers" or "laborers," and "laborer" seems to become "day laborer" after 1870.
+
+This workspace will introduce you to a shortcut for working with census data in bulk: **IPUMS USA** has transcribed every person in the 1850, 1860, 1870, 1880, 1900 and 1910 censuses, nationwide, and makes those **full-count** files free for research. Below, you'll download Delaware County from them, pick out Liberty Township, and count. By the time you push this back to GitHub, you will have:
+
+1.  **A dataset of everyone in Liberty Township** in six censuses, 1850–1910, with age, sex, birthplace, household role, occupation and industry.
+2.  **A test of your "laborer" puzzle**: how IPUMS classified laborers, checked against the words on the census pages.
+3.  **Occupations over time**, in groups you define (farming, labor, trade, crafts, railroad, gas and oil, factories), charted against the railroad, the gas boom, and the oil boom, for Liberty Township and for the whole county.
+4.  **Who worked**: men and women, household heads and children, and how "keeping house" was recorded.
+5.  **Who came**: where Liberty Township's people were born, census by census, to see whether the boom brought newcomers.
+
+Seeing both stories in the data, the railroad (1850s–1870s) and the boom (1880s–1900s), will also help you choose one, as I suggested in my feedback.
+
+Read the explanation before you run each chunk. The steps run in order, so each chunk needs the ones before it.
+
+### Your census years vs. what happened between them
+
+| Census | What happened around it |
+|----|----|
+| 1850 | Smithfield a river village (platted 1830) |
+| 1860 | The Indianapolis and Bellefontaine railroad reaches Liberty Township (1852); Selma platted (1852) |
+| 1870 |  |
+| 1880 |  |
+| 1890 (Lost) | The 1890 population schedules were almost all destroyed after a 1921 fire. Gas discovered near Eaton (1886); the boom begins. |
+| 1900 | The railroad becomes part of the Big Four (1889). Taken as of June 1, just before the oil strike near Smithfield (June 1900). |
+| 1910 | Indiana's oil production peaks (1904) and falls; Smithfield's wells go dry (1904); school consolidated into Selma's (1906); Selma incorporated (1907) |
+
+As I mentioned in my feedback on your Historical Context, the census skips the gas boom years, and the oil years fall between 1900 and 1910. You could cover those gaps with newspapers.
+
+::: callout-warning
+## IPUMS data stays off GitHub
+
+IPUMS data is free for research, but its terms don't allow you to share it, so it stays on your computer (Section 0 sets this up). Your counts in `data/rojas/` and your charts in `output/rojas/` can be committed: they're your own analysis.
+:::
+
+## 0. Your project folders
+
+Your work lives in two folders named after you:
+
+- **`data/rojas/`** holds your datasets: the sources you download, and every dataset this workspace makes from them (cleaned, processed, counted).
+- **`output/rojas/`** holds what you make to show: charts, maps, and your writing.
+
+```
+HIST446-Final-Project/
+├── HIST446-Final-Project.Rproj         ← open this first
+├── README.md                           ← how to get, update and commit the repository
+├── .gitignore                          ← one file for the whole class: don't edit it
+├── Rojas_Workspace.qmd                 ← this file
+├── ...                                 ← your classmates' workspaces
+├── data/
+│   └── rojas/                          ← your datasets: sources, and everything made from them
+│       ├── ipums/                      ← your IPUMS extract: a .dat.gz file and an .xml file
+│       └── *.csv                       ← your counts (created automatically)
+└── output/
+    └── rojas/                          ← your charts, maps and writing (created automatically)
+```
+
+### What stays off GitHub
+
+IPUMS's terms don't allow you to share its data, so the `.gitignore` already keeps `data/rojas/ipums/` off GitHub. Remember not to edit the `.gitignore` (the `README.md` explains why).
+
+### What to commit
+
+Commit this `.qmd` file, the CSV files in `data/rojas/`, and everything in `output/rojas/`.
+
+## 1. One-time installation
+
+You only need to run this chunk once. It is set to `eval: false` so it won't run every time you render the document.
+
+```{r}
+#| label: install
+#| eval: false
+
+install.packages(c(
+  "ipumsr",    # reading IPUMS data
+  "readr",     # writing CSV files
+  "dplyr", "tidyr", "stringr",  # data wrangling
+  "ggplot2"    # charts
+))
+```
+
+## 2. Get your data from IPUMS USA
+
+You'll request an **extract**: just the people and the variables you need. If you don't have an IPUMS USA account yet, register first at [usa.ipums.org](https://usa.ipums.org) (it's free, but approval can take a day).
+
+1.  Go to [usa.ipums.org](https://usa.ipums.org) and click **Get Data**.
+2.  Keep **Harmonized data** selected and then click **Select Samples**.
+3.  Uncheck everything on the "USA Samples" tab. On the **USA Full Count** tab, check **1850, 1860, 1870, 1880, 1900 and 1910**. Click **Submit sample selections**.
+4.  Click on **Search** under "Select Harmonized Variables". Add the variables below to your cart. Type each name in the **Basic** **Search** box, then click **Search**.
+5.  A list of results will show up. Click the plus sign next to the exact variable you searched for.
+
+- Geography: `STATEFIP`, `COUNTYICP`, `MCDPOP` (the population of the person's township, 1850–1880), `ENUMDIST` (enumeration district, 1880–1910)
+- Household: `SERIAL` (household id, could be preselected), `RELATE` (relationship to the household head)
+- Person: `SEX`, `AGE`, `BPL` (birthplace), `OCC1950` (occupation), `IND1950` (industry)
+
+6.  Click **View Cart**, then **Create Data Extract**.
+7.  Under Options, choose **Select cases**. Select `STATEFIP` and `COUNTYICP`, submit, and choose **Indiana** for`STATEFIP` and **0350 (the code for Delaware)** for `COUNTYICP`. This keeps only Delaware County, so your file stays small.
+8.  Write a description ("Delaware County, Indiana, 1850-1910, full count"), keep the default data format, and click **Submit Extract**.
+
+Full-count extracts can take a while to process. You'll get an email when it's ready. You may download the files directly from the email, or download them from your data requests page in your IPUMS account. You'll need two files: the data file (`.dat.gz`) and the **DDI** codebook (`.xml`, under "Codebook"). The DDI Codebook looks like a webpage. Just Right click anywhere on the page and "Save As". Save both files in `data/rojas/ipums/`.
+
+::: callout-note
+## What the public files leave out
+
+The free full-count files don't include names, the township's name, or the occupation as the enumerator wrote it: those are only in a restricted version. So in this workspace, you'll find Liberty Township with numbers (Section 5), and you'll see occupations as IPUMS **classified** them (Section 6). **For names and exact wording, the census pages on Ancestry are still your source.**
+:::
+
+## 3. Load packages and settings
+
+If you're returning to this file at a later time, start here.
+
+```{r}
+#| label: setup
+
+library(ipumsr)
+library(readr)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(ggplot2)
+
+# ---- settings ----
+datadir  <- "data/rojas"       # your datasets
+outdir   <- "output/rojas"     # your charts and writing
+ddi_file <- list.files(file.path(datadir, "ipums"), pattern = "\\.xml$", full.names = TRUE)[1]   # your IPUMS codebook
+
+# Events to mark on the charts
+events <- tribble(
+  ~year, ~event,
+  1852,  "Railroad; Selma platted",
+  1886,  "Gas discovered near Eaton",
+  1900,  "Oil struck near Smithfield",
+  1904,  "Smithfield wells dry"
+)
+
+dir.create(datadir, recursive = TRUE, showWarnings = FALSE)
+dir.create(outdir,  recursive = TRUE, showWarnings = FALSE)
+```
+
+## 4. Read your extract
+
+`read_ipums_micro()` reads the data file using the DDI codebook, which tells R what each column and each code means. We make the column names lower case to match our usual style.
+
+```{r}
+#| label: read-ipums
+
+county <- read_ipums_micro(ddi_file, verbose = FALSE) %>%
+  rename_with(str_to_lower)
+
+county %>% count(year)
+```
+
+IPUMS stores categories like birthplace as **numeric codes with labels**: `BPL` code 18 means Indiana. `as_factor()` turns the codes into their labels, which are easier to read. `occupation_text` and `industry` are the labels in lower case, which makes them easier to search.
+
+```{r}
+#| label: labels
+
+county <- county %>%
+  mutate(sex_label     = as_factor(sex),
+         relate_label  = as_factor(relate),
+         bpl_label     = as_factor(bpl),
+         occ1950_label = as_factor(occ1950),
+         ind1950_label = as_factor(ind1950),
+       occupation_text = str_to_lower(as.character(occ1950_label)),
+         industry      = str_to_lower(as.character(ind1950_label)))
+
+county %>% select(year, age, sex_label, relate_label, bpl_label, occ1950_label, ind1950_label) %>% head(10)
+```
+
+## 5. Find Liberty Township
+
+The census is organized by township, but the public full-count files don't name the township. You'll find Liberty Township with two numbers instead:
+
+- **1850–1870: `mcdpop`**, the population of each person's township. Everyone in the same township has the same number, so in each year, each township shows up as one value. Before 1880, U.S. marshals counted people by township or other local area with no numbered districts.
+- **1880–1910: `enumdist`**, the enumeration district (ED). Each township was counted in one or more EDs, and the ED number is printed on every census page. After 1880, an ED was the area one census taker (an "enumerator") was responsible for counting. Each ED was meant to be small enough for one person to canvass door to door within the counting period.
+
+### 1850–1870: by township population
+
+In each year, each value of `mcdpop` is one township. Delaware County had twelve: Center (Muncie), Delaware, Hamilton, Harrison, Liberty, Monroe, Mount Pleasant, Niles, Perry, Salem, Union and Washington. (A township created later in the period won't appear in the early years.) `people` should be close to `mcdpop` itself:
+
+```{r}
+#| label: townships-by-population
+
+county %>%
+  filter(year <= 1870) %>%
+  count(year, mcdpop, name = "people") %>%
+  arrange(year, desc(mcdpop))
+```
+
+Which one is Liberty Township? Two ways to find out, and you should use both:
+
+1.  **Its size (my recommendation).** Count the people on the Liberty Township pages on Ancestry for that year. Multiple the line number at the bottom of each page with the total pages for Liberty, until you hit the last filled row for the township. You can follow this link and log in to your ancestry account to do it for 1850: <https://www.ancestry.com/imageviewer/collections/8054/images/4193375-00061?usePUB=true&_phsrc=veK39>. Pick the `mcdpop` value that matches.
+2.  **A household you know.** Choose a household from your Ancestry pages: the head's age and birthplace, and how many people live in it. Then look for it in the township you picked. If it's there, you've found Liberty Township.
+
+```{r}
+#| label: find-household
+
+candidate_year   <- 1850
+candidate_mcdpop <- 1171   # the value you think is Liberty Township
+
+county %>%
+  filter(year == candidate_year, mcdpop == candidate_mcdpop) %>%
+  group_by(serial) %>%
+  filter(any(str_detect(relate_label, "Head") & age == 45 & bpl_label == "Ohio")) %>%   # change to your household's head
+  ungroup() %>%
+  select(serial, relate_label, sex_label, age, bpl_label, occ1950_label)
+```
+
+When you're sure, replace `0` with each year's value in `liberty_mcdpop` below.
+
+```{r}
+# Liberty Township in 1850, 1860 and 1870: its population (MCDPOP), from Section 5
+liberty_mcdpop <- tribble(
+  ~year, ~mcdpop,
+   1850, 0,
+   1860, 0,
+   1870, 0,
+)
+```
+
+### 1880–1910: by enumeration district
+
+Open any page of the 1880 Liberty Township census on Ancestry, the same pages you read for your Close Reading. The top of every page says "Supervisor's District No. **" and "Enumeration District No.** ". Write down the ED number, and check a few pages: a township can have more than one. Do the same for 1900 and 1910.
+
+Then compare with the ED numbers in your extract. IPUMS may write them with extra digits (for example, with the supervisor's district in front), so look for numbers that *end* in your ED:
+
+```{r}
+#| label: county-eds
+
+county %>%
+  filter(year >= 1880) %>%
+  count(year, enumdist, name = "people")
+```
+
+Replace `0` with the right ED numbers in `liberty_eds`, one row per year and ED.
+
+```{r}
+# Liberty Township in 1880, 1900 and 1910: its enumeration district (ED) numbers, from Section 5
+liberty_eds <- tribble(
+  ~year, ~enumdist,
+    1880, 0,
+    1900, 0,
+    1910, 0,
+)
+```
+
+Now put both pieces together:
+
+```{r}
+#| label: liberty
+
+liberty_1850_1870 <- county %>%
+  filter(year <= 1870) %>%
+  semi_join(liberty_mcdpop, by = c("year", "mcdpop"))
+
+liberty_1880_1910 <- county %>%
+  filter(year >= 1880) %>%
+  semi_join(liberty_eds, by = c("year", "enumdist"))
+
+liberty <- bind_rows(liberty_1850_1870, liberty_1880_1910)
+
+liberty %>% count(year)
+```
+
+::: callout-warning
+## Township, not village
+
+Smithfield was never counted on its own: it's inside Liberty Township, together with Selma and the farms around them. So these are **Liberty Township's** occupations. Selma grew with the railroad and the boom, so a change in the township can be Selma's change, not Smithfield's. Your newspapers and your close reading of individual households are how you'll tell them apart.
+:::
+
+## 6. Your "laborer" puzzle
+
+In your Close Reading, "laborer" seemed to turn into "day laborer" after 1870. The public IPUMS files don't keep the enumerator's words: they keep `occ1950`, which puts every occupation into the categories of the **1950** census, so a laborer in 1850 and one in 1910 get comparable codes. Here are all the "laborer" categories, census by census:
+
+```{r}
+#| label: laborers
+
+laborer_categories <- liberty %>%
+  filter(str_detect(occupation_text, "laborer")) %>%
+  count(year, occ1950_label) %>%
+  pivot_wider(names_from = year, values_from = n, values_fill = 0)
+
+write_csv(laborer_categories, file.path(datadir, "laborer-categories-by-year.csv"))
+
+laborer_categories
+```
+
+"Laborer" and "day laborer" almost certainly land in the same category here. That's a decision IPUMS made for you: it treats them as the same job. To test whether they were, you'll need the pages themselves.
+
+## Your turn: check the words against the codes
+
+Pick one census before 1870 and one after. On Ancestry, copy the exact occupation of 20 men in Liberty Township who were listed as some kind of laborer. Then answer:
+
+1.  Which words did enumerators use? Did "day laborer" replace "laborer," or appear next to it?
+
+> 
+
+2.  Did the instructions to enumerators change? The [IPUMS enumeration instructions](https://usa.ipums.org/usa/voliii/tEnumInstr.shtml) for each census year will tell you.
+
+> 
+
+3.  Do you agree with IPUMS that these are the same job?
+
+> 
+
+## 7. Occupations over time
+
+There are dozens of `occ1950` categories and `ind1950` industries, so group them. The table below is a starting list with my own suggestions, but **these are your categories**, so you should read what falls into each group and change them as you seem fit for your research question.
+
+Each group checks one column, `occupation_text` or `industry`, for a text pattern. The loop gives each person the **first** group that matches, so the order matters:
+
+- non-answers come first ("keeps house," "at school," blank);
+- then **industries**, so that a laborer at an oil well counts as gas and oil, and a laborer for the railroad counts as railroad;
+- then **occupations**.
+
+```{r}
+#| label: occupation-groups
+
+group_patterns <- tribble(
+  ~group,                 ~column,      ~pattern,
+  "keeping house",        "occupation_text", "keeps house|housework|housewife",
+  "at school",            "occupation_text", "school|student",
+  "no occupation listed", "occupation_text", "n/a|missing|unknown|without occupation|retired|invalid|inmate|leisure|non-occupational|not yet classified",
+  "gas and oil",          "industry",   "petroleum|natural gas",
+  "railroad",             "industry",   "railroad|railway",
+  "factories",            "industry",   "manufactur|glass|iron|steel|foundr",
+  "farming",              "occupation_text", "farm",
+  "labor",                "occupation_text", "laborer",
+  "trade",                "occupation_text", "manager|proprietor|sales|clerical|clerk|dealer",
+  "professional",         "occupation_text", "physician|teacher|clergy|lawyer|professional|technical",
+  "crafts",               "occupation_text", "craftsm|carpenter|blacksmith|mason|shoemaker|cabinet|painter|tailor|mechanic|operative",
+  "domestic",             "occupation_text", "private household|servant|housekeeper|laundress"
+)
+
+liberty$group <- NA_character_ # create the group column with empty values first
+
+for (i in seq_len(nrow(group_patterns))) {
+  values  <- liberty[[group_patterns$column[i]]]
+  matches <- is.na(liberty$group) & str_detect(values, group_patterns$pattern[i])
+  liberty$group[matches %in% TRUE] <- group_patterns$group[i]
+}
+liberty$group[is.na(liberty$group)] <- "other"
+
+liberty %>% count(group, sort = TRUE)
+```
+
+Look at the "other" group: which categories did your patterns miss? Add them and run the chunk above again. Also look at what IPUMS calls the non-answers, so your first three patterns catch them:
+
+```{r}
+#| label: other-occupations
+
+liberty %>% filter(group == "other") %>% count(occupation_text, industry, sort = TRUE) %>% head(30)
+```
+
+What about other broad categories, like "no occupation listed"? Can you spot any occupations that were lumped in these groups that should maybe become their own group? (Hint: "inmates"?) Run:
+
+```{r}
+liberty %>% filter(group %in% c("keeping house", "at school", "no occupation listed")) %>% count(group, occupation_text)
+```
+
+Now chart the share of **people with an occupation** in each group, census by census. "Keeping house," "at school" and "no occupation listed" are left out of the shares here; Section 8 looks at them.
+
+```{r}
+#| label: groups-over-time
+#| fig-width: 10
+#| fig-height: 5
+
+group_shares <- liberty %>%
+  filter(!group %in% c("keeping house", "at school", "no occupation listed")) %>%
+  count(year, group) %>%
+  group_by(year) %>%
+  mutate(percent = round(100 * n / sum(n), 1)) %>%
+  ungroup()
+
+write_csv(group_shares, file.path(datadir, "occupation-groups-liberty.csv"))
+
+ggplot(group_shares, aes(x = year, y = percent, color = group)) +
+  geom_vline(data = events, aes(xintercept = year), linetype = "dashed", color = "grey70") +
+  geom_text(data = events, aes(x = year, y = Inf, label = event), inherit.aes = FALSE,
+            angle = 90, hjust = 1.05, vjust = -0.4, size = 3, color = "grey40") +
+  geom_line() +
+  geom_point() +
+  scale_x_continuous(breaks = c(1850, 1860, 1870, 1880, 1900, 1910)) +
+  labs(title = "Occupations in Liberty Township, Delaware County, 1850-1910",
+       subtitle = "Percent of people with an occupation. No census survives for 1890.",
+       x = NULL, y = "Percent", color = "Group") +
+  theme_minimal()
+```
+
+::: callout-note
+## Mind the gap
+
+`geom_line()` draws a straight line from 1880 to 1900, as if the change were steady. It wasn't: the whole gas boom happened in that gap. Say so whenever you show this chart.
+:::
+
+### Was Liberty Township different from the county?
+
+A change in Liberty Township means more if you know whether the whole county changed too. Apply the same groups to everyone in Delaware County:
+
+```{r}
+#| label: county-comparison
+#| fig-width: 10
+#| fig-height: 5
+
+county$group <- NA_character_ # create the group column with empty values first
+
+for (i in seq_len(nrow(group_patterns))) {
+  values  <- county[[group_patterns$column[i]]]
+  matches <- is.na(county$group) & str_detect(values, group_patterns$pattern[i])
+  county$group[matches %in% TRUE] <- group_patterns$group[i]
+}
+county$group[is.na(county$group)] <- "other"
+
+comparison <- bind_rows(
+  liberty %>% mutate(place = "Liberty Township"),
+  county  %>% mutate(place = "Delaware County")
+) %>%
+  filter(!group %in% c("keeping house", "at school", "no occupation listed")) %>%
+  count(place, year, group) %>%
+  group_by(place, year) %>%
+  mutate(percent = round(100 * n / sum(n), 1)) %>%
+  ungroup()
+
+write_csv(comparison, file.path(datadir, "occupation-groups-comparison.csv"))
+
+comparison %>%
+  filter(group %in% c("farming", "labor", "gas and oil", "railroad", "factories", "trade")) %>%
+  ggplot(aes(x = year, y = percent, color = place)) +
+  geom_line() +
+  geom_point() +
+  facet_wrap(~ group, scales = "free_y") +
+  scale_x_continuous(breaks = c(1850, 1870, 1900)) +
+  labs(title = "Liberty Township compared with Delaware County",
+       x = NULL, y = "Percent of people with an occupation", color = NULL) +
+  theme_minimal()
+```
+
+Does the `gas and oil` group appear in 1900 and 1910? Is Liberty Township ahead of or behind the county? Remember that Muncie (Center Township) is in the county numbers, and Muncie's boom was industrial: glass, iron and factories. That's what the `factories` group is for.
+
+> 
+
+## 8. Who worked?
+
+Your Close Reading noticed that in most households only the head (and sometimes a son) had an occupation, while wives were "keeping house." Count it:
+
+```{r}
+#| label: who-worked
+
+who_worked <- liberty %>%
+  filter(age >= 15) %>%
+  mutate(status = case_when(
+    group == "keeping house"        ~ "keeping house",
+    group == "at school"            ~ "at school",
+    group == "no occupation listed" ~ "no occupation listed",
+    .default =   "occupation listed"
+  )) %>%
+  count(year, sex_label, status) %>%
+  group_by(year, sex_label) %>%
+  mutate(percent = round(100 * n / sum(n), 1)) %>%
+  ungroup()
+
+write_csv(who_worked, file.path(datadir, "who-worked.csv"))
+
+who_worked
+```
+
+Check where the "keeping house" answers come from. Paid housekeepers ("housekeepers, private household") are counted as `domestic`. If IPUMS had filled in any answers itself, they would show up here under a label with the word "imputed."
+
+```{r}
+liberty %>% filter(group == "keeping house") %>% count(year, occupation_text)
+```
+
+Look at how the counts change from one census to the next. Women's housework didn't appear in 1850 and disappear by 1900: what changed was how enumerators were told to record women at home, and how IPUMS coded their answers. Where did the wives go in the years with few "keeping house" answers?
+
+```{r}
+liberty %>%
+  filter(sex_label == "Female", age >= 15, str_detect(relate_label, "Spouse")) %>%
+  count(year, group)
+```
+
+If most wives in 1900 and 1910 are under "no occupation listed," the change is in the recording, not in the work. Check the [enumeration instructions](https://usa.ipums.org/usa/voliii/tEnumInstr.shtml) for those years to see what enumerators were told to write.
+
+::: callout-note
+## What the census couldn't see
+
+"Keeping house" and a blank occupation don't mean a woman didn't work. Farm wives milked, raised poultry, sold butter and eggs, and took in boarders, but enumerators rarely wrote that down, and instructions differed from census to census. In 1850, the census didn't ask women's occupations at all. Historians of women's work have written about this undercount and it's worth a sentence in your paper.
+:::
+
+## 9. Who came?
+
+If the boom drew newcomers, you might see more people born outside Indiana in 1900 and 1910. `bpl` is the state or country of birth:
+
+```{r}
+#| label: birthplaces
+
+birthplaces <- liberty %>%
+  mutate(born = case_when(
+    bpl_label == "Indiana"   ~ "Indiana",
+    as.numeric(bpl) < 100    ~ "another U.S. state",   # IPUMS codes U.S. states below 100
+    .default =               "outside the U.S."
+  )) %>%
+  count(year, born) %>%
+  group_by(year) %>%
+  mutate(percent = round(100 * n / sum(n), 1)) %>%
+  ungroup()
+
+write_csv(birthplaces, file.path(datadir, "birthplaces.csv"))
+
+birthplaces
+```
+
+The top states and countries of birth, for people not born in Indiana:
+
+```{r}
+liberty %>%
+  filter(bpl_label != "Indiana") %>%
+  count(year, bpl_label) %>%
+  group_by(year) %>%
+  slice_max(n, n = 5, with_ties = FALSE)
+```
+
+Ohio will probably lead in the early years. The National Road crossed central Indiana in the 1830s and was a main route for migrants from Ohio and other states to the east. Whether that changes in 1900 and 1910, and whether the gas and oil workers were the newcomers, is a question you can test. Try:
+
+```{r}
+liberty %>%
+  filter(bpl_label != "Indiana") %>%
+  count(year, group, bpl_label) %>%
+  group_by(year) %>%
+  slice_max(n, n = 5, with_ties = FALSE)
+```
+
+\[ \] **Commit** this `.qmd` file, the CSV files in `data/rojas/`, and `output/rojas/`. Make sure that `data/rojas/ipums/` is not included.
+
+## 10. Thinking like a historian about this pipeline
+
+Every step here **transforms the source.** You should say this in your final project.
+
+- **The enumerator wrote the occupation.** Each census taker recorded what he heard and how he thought it should be written. "Laborer" versus "day laborer" may be a change in the work, in the instructions, or in who is writing the census. The [enumeration instructions](https://usa.ipums.org/usa/voliii/tEnumInstr.shtml) for each year are a primary source too, and I encourage you to give it a close-read.
+
+- **IPUMS is a transcription and a classification.** Volunteers and Ancestry transcribed these pages, and IPUMS coded them: `occ1950` sorts 19th-century jobs into 1950's categories, and `ind1950` guesses the industry from the job. Your dataset never shows the enumerator's words. When a result depends on the exact wording, you should always go back to the pages.
+
+- **"Keeping house" means different things in different years.** How enumerators recorded women at home changed from census to census, and IPUMS coded those answers into its own categories. Compare the counts year by year in Section 8 before you write about women's work.
+
+- **Your groups are an argument.** "Gas and oil," "trade," "labor": you decided what goes where. Report your patterns, and check whether your result holds when you change them.
+
+- **The gaps are where your story is.** No 1890 census, and the oil years fall between 1900 and 1910. Your newspapers, like the 1900 report of the oil strike, are how you'll see inside those gaps.
+
+- **The census counts people, not businesses.** Your Overview asked about "successful business." The census can show who worked as a merchant or a driller, but not whether a business succeeded. Newspaper ads and notices counted over time could be your second source for that.
+
+## Exploratory Data Analysis
+
+### Check the packaging
+
+> **Peng:** Before opening the wrapped "present," shake the box: how many rows and columns are there? And do they match what you expected? ([Peng, "Check the packaging"](https://bookdown.org/rdpeng/exdata/exploratory-data-analysis-checklist.html#check-the-packaging))
+
+```{r}
+#| label: eda-packaging
+
+nrow(county)    # everyone in Delaware County, six censuses
+nrow(liberty)   # Liberty Township
+ncol(liberty)
+```
+
+### Check your "n"s
+
+> **Peng:** Count things, and compare the counts with *landmarks*: numbers you know should be true. If you expect 1,000 people and find 20, something's wrong. ([Peng, "Check your 'n's"](https://bookdown.org/rdpeng/exdata/exploratory-data-analysis-checklist.html#check-your-ns))
+
+```{r}
+#| label: eda-ns
+
+# people and households per census
+liberty %>%
+  group_by(year) %>%
+  summarize(people = n(), households = n_distinct(serial), people_per_household = round(people / households, 1))
+```
+
+```{r}
+# ages: anything impossible?
+summary(liberty$age)
+```
+
+Does the number of people grow or reduce from census to census? Do these numbers look reasonable?
+
+### A first experiment: which occupations are new?
+
+Your groups count occupations you chose. Let the census suggest some: which occupations and industries appear in Liberty Township for the **first time** in each census?
+
+```{r}
+#| label: eda-new-occupations
+
+first_seen_occupation <- liberty %>%
+  filter(!is.na(occupation_text), occupation_text != "") %>%
+  group_by(occupation_text) %>%
+  summarize(first_year = min(year), people = n(), .groups = "drop")
+
+write_csv(first_seen_occupation, file.path(datadir, "first-seen-occupations.csv"))
+
+first_seen_occupation %>%
+  filter(first_year >= 1880) %>%
+  arrange(first_year, desc(people)) %>%
+  group_by(first_year) %>%
+  slice_head(n = 15)
+```
+
+```{r}
+first_seen_industry <- liberty %>%
+  group_by(industry) %>%
+  summarize(first_year = min(year), people = n(), .groups = "drop")
+
+write_csv(first_seen_industry, file.path(datadir, "first-seen-industries.csv"))
+
+first_seen_industry %>%
+  filter(first_year >= 1880) %>%
+  arrange(first_year, desc(people)) %>%
+  group_by(first_year) %>%
+  slice_head(n = 15)
+```
+
+## Food for thought
+
+Which new occupations in 1900 and 1910 belong to the gas and oil boom, to the railroad, or to Selma's growth as a town? Which ones would you want to find in the newspapers? Write down two or three ideas. They're the start of your Method Selection assignment.
+
+> 

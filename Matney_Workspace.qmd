@@ -1,0 +1,723 @@
+---
+title: "HIST 446 The Past as Data: Final Project Workspace"
+subtitle: "Student: Alexander Matney"
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    code-copy: true
+    embed-resources: true
+execute:
+  warning: false
+  cache: false
+---
+
+## Getting Started (November 11, 2026)
+
+Alex,
+
+Your research question asks how American newspapers portrayed the Habsburgs between 1914 and 1918, and whether that portrayal changed once the United States went to war with Austria-Hungary. In this workspace, you will search **Chronicling America**, the Library of Congress's collection of digitized newspapers, and turn the results into sources and data you can analyze. By the time you push this back to GitHub, you will have:
+
+1. **A timeline chart** of how often "Francis Joseph" appears in American newspapers each month from 1914 to 1918, with the key events of your period marked on it.
+2. **A dataset (CSV) of newspaper pages** that mention Austria-Hungary around four key moments, with each page's date, newspaper, place, and links to the page and its image.
+3. **Three full-resolution page images**, chosen by you, ready for close reading, and a **reading log** for each.
+
+The steps below adapt the script I use to collect newspaper pages about world's fairs for my own research. Read the explanation before you run each chunk. The steps run in order, so each chunk needs the ones before it.
+
+### The moments to look for
+
+Keep these dates in front of you. They are the moments when Austria-Hungary was most likely to make American headlines.
+
+| Date | Event |
+|------|-------|
+| June 28, 1914 | Assassination of Archduke Franz Ferdinand in Sarajevo |
+| Sept. 8, 1915 | The U.S. declares Austro-Hungarian Ambassador Konstantin Dumba unacceptable and demands his recall (the "Dumba affair") |
+| Nov. 8, 1915 | The Italian liner *Ancona* is sunk by a German submarine flying the Austro-Hungarian flag; Americans are among the dead |
+| Nov. 21, 1916 | Death of Emperor Francis Joseph |
+| Apr. 6, 1917 | The U.S. declares war on Germany (Austria-Hungary breaks off relations two days later) |
+| Dec. 7, 1917 | The U.S. declares war on Austria-Hungary |
+| Dec. 11, 1917 | Wilson's Proclamation No. 1417 sets rules for Austro-Hungarian nationals in the U.S. |
+| Jan. 8, 1918 | Wilson's Fourteen Points |
+| May 31, 1918 | Czech and Slovak Americans sign the Pittsburgh Agreement during Masaryk's U.S. tour |
+
+Notice the eight months between April and December 1917, when the U.S. was at war with Germany but not with Austria-Hungary. Your question fits right there.
+
+
+
+## 0. Your project folders
+
+Your work lives in two folders named after you:
+
+- **`data/matney/`** holds your datasets: the sources you download, and every dataset this workspace makes from them (cleaned, processed, counted).
+- **`output/matney/`** holds what you make to show: charts, maps, and your writing.
+
+```
+HIST446-Final-Project/
+├── HIST446-Final-Project.Rproj         ← open this first
+├── README.md                           ← how to get, update and commit the repository
+├── .gitignore                          ← one file for the whole class: don't edit it
+├── Matney_Workspace.qmd                ← this file
+├── ...                                 ← your classmates' workspaces
+├── data/
+│   └── matney/                         ← your datasets: sources, and everything made from them
+│       ├── images/                     ← your newspaper page images (created automatically)
+│       ├── batches/                    ← the raw results from the API (created automatically)
+│       └── *.csv                       ← your counts and your pages dataset (created automatically)
+└── output/
+    └── matney/                         ← your charts, maps and writing (created automatically)
+```
+
+### What stays off GitHub
+
+Full-resolution newspaper scans are large (often several MB each), and the `batches/` folder holds the raw batches from Section 7, which end up combined in `pages.csv`. The `.gitignore` already keeps `data/matney/images/` and `data/matney/batches/` off GitHub. Remember not to edit the `.gitignore` (the `README.md` explains why).
+
+### What to commit
+
+Commit this `.qmd` file, the CSV files in `data/matney/`, and everything in `output/matney/`. They document how you found your sources, which is part of your Reproducibility grade.
+
+## 1. One-time installation
+
+You only need to run this chunk once. It is set to `eval: false` so it won't run every time you render the document.
+
+```{r}
+#| label: install
+#| eval: false
+
+install.packages(c(
+  "httr",      # sending requests to the Library of Congress API
+  "jsonlite",  # reading the JSON the API sends back
+  "readr",     # writing CSV files
+  "dplyr", "tidyr", "stringr",  # data wrangling
+  "ggplot2",   # charts
+  "tidytext"   # splitting text into words (Exploratory Data Analysis)
+))
+```
+
+Unlike some APIs we've used in class, the Library of Congress API **doesn't need a key**. Anyone can use it, as long as they don't send too many requests (see Section 3).
+
+## 2. Load packages and settings
+
+If you're returning to this file at a later time, start here.
+
+```{r}
+#| label: setup
+
+library(httr)
+library(jsonlite)
+library(readr)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(ggplot2)
+
+# ---- settings ----
+main_phrase   <- "Francis Joseph"   # the phrase for the timeline in Section 6
+period_start  <- "1914-06-28"       # Sarajevo
+period_end    <- "1918-11-11"       # Armistice
+datadir       <- "data/matney"                # your datasets
+outdir        <- "output/matney"              # your charts and writing
+imgdir        <- file.path(datadir, "images") # where page images go
+pause_seconds <- 5                  # wait between requests (see Section 3)
+
+dir.create(outdir, recursive = TRUE, showWarnings = FALSE)
+dir.create(imgdir, recursive = TRUE, showWarnings = FALSE)
+```
+
+## 3. How Chronicling America's API works
+
+Since 2025, Chronicling America has been searched through the general **loc.gov API**. You ask it a question by building a URL, and it answers with **JSON** (structured data) instead of a web page.
+
+Here's what our search URLs will contain:
+
+| Piece of the URL | What it does |
+|------------------|--------------|
+| `https://www.loc.gov/collections/chronicling-america/` | Search only the Chronicling America collection |
+| `dl=page` | Return newspaper **pages** (not whole issues) |
+| `searchType=advanced` + `ops=PHRASE` | Advanced search for the exact phrase |
+| `qs=Francis%20Joseph` | The phrase itself (`%20` is how URLs write a space) |
+| `start_date=` + `end_date=` | The date range (YYYY-MM-DD) |
+| `c=100` | Results per request (we'll ask for 100 at a time) |
+| `sb=title_s` | Sort by newspaper title. Sorting by date sometimes returns duplicate pages, so we sort by title and re-sort by date ourselves later. |
+| `fo=json` | Answer in JSON |
+
+::: {.callout-important}
+## Be polite to the Library of Congress
+
+The loc.gov API allows **20 requests per minute**. If you go over that, your computer is **blocked for an hour**. Every loop in this file pauses 5 seconds between requests (`Sys.sleep()`), which keeps us at 12 per minute. Don't lower `pause_seconds`, and don't run several loops at once.
+:::
+
+### Build a search URL
+
+`build_search_url()` puts the pieces of the table above together. `URLencode()` turns the spaces in your phrase into `%20`.
+
+```{r}
+#| label: build-url
+
+build_search_url <- function(phrase, start_date, end_date, per_page = 100) {
+  paste0(
+    "https://www.loc.gov/collections/chronicling-america/",
+    "?dl=page",
+    "&searchType=advanced",
+    "&ops=PHRASE",
+    "&qs=", URLencode(phrase, reserved = TRUE),
+    "&start_date=", start_date,
+    "&end_date=", end_date,
+    "&c=", per_page,
+    "&sb=title_s",
+    "&fo=json"
+  )
+}
+
+# Try it:
+build_search_url("Francis Joseph", "1916-11-21", "1916-12-05")
+```
+
+Copy that URL into your browser. You'll see the raw JSON file the API returns. Then delete `&fo=json` from the end of the URL and load it again: it's the same search as a normal web page.
+
+### Send a request
+
+`get_json()` sends a request and reads the answer. `RETRY()` tries again a few times if the connection drops, waiting a little longer each time. It stops right away on errors that retrying won't fix, including **429**, which means the Library has paused us. You don't need to understand every line of it.
+
+```{r}
+#| label: get-json
+
+get_json <- function(url) {
+  response <- RETRY(
+    "GET", url,
+    times = 5,                                   # try up to 5 times
+    pause_base = 2,                              # wait 2s, 4s, 8s... between tries
+    terminate_on = c(400, 403, 404, 429),        # but don't retry these errors
+    timeout(120),                                # the API can take a minute or more to answer
+    user_agent("HIST 446 student project, Ball State University"),
+    config = config(http_version = 2L)           # forces HTTP/1.1; the API sometimes drops HTTP/2 connections
+  )
+  if (status_code(response) == 429) {
+    stop("Too many requests: the Library of Congress has paused us. Wait an hour before trying again.")
+  }
+  if (status_code(response) != 200) {
+    stop("The request failed with status ", status_code(response), ".")
+  }
+  fromJSON(content(response, as = "text", encoding = "UTF-8"))
+}
+```
+
+## 4. A first request
+
+How many pages between the emperor's death and early December 1916 mention "Francis Joseph"?
+
+```{r}
+#| label: first-request
+
+url <- build_search_url("Francis Joseph", "1916-11-21", "1916-12-05")
+first_response <- get_json(url)
+
+first_response$search$hits      # total number of matching pages
+```
+
+These are fields the API gives us for each page:
+```{r}
+names(first_response$results) 
+```
+
+Each result is **one newspaper page**, not one article. A page that matches might have a front-page story on the emperor's funeral, or a one-line mention inside an advertisement. You will only know by reading the page.
+
+Let's look at a few fields from the first results:
+
+```{r}
+#| label: first-look
+
+first_response$results %>%
+  select(date, title) %>%
+  head(10)
+```
+
+## 5. Which words should you search for?
+
+American papers did not always call the emperor the same thing. OCR (the machine-readable text of the scans) also makes mistakes. Before collecting anything, compare how many pages each phrase finds across the whole period. We only need the count, so `count_hits()` asks for a single result per request (`per_page = 1`).
+
+```{r}
+#| label: count-function
+
+count_hits <- function(phrase, start_date, end_date) {
+  url <- build_search_url(phrase, start_date, end_date, per_page = 1)
+  response <- get_json(url)
+  response$search$hits
+}
+```
+
+The loop below sends one request per phrase. We **save the results** to `data/matney/search-terms-compared.csv`. The next time you run this chunk, R reads the saved file instead of asking the API again.
+
+```{r}
+#| label: compare-terms
+
+terms_file <- file.path(datadir, "search-terms-compared.csv")
+
+if (file.exists(terms_file)) {
+  term_counts <- read_csv(terms_file)
+} else {
+  terms <- c("Francis Joseph", "Franz Josef", "Franz Joseph",
+             "Austria-Hungary", "Austro-Hungarian", "Hapsburg", "Habsburg")
+  term_counts <- tibble(term = terms, pages = NA_real_)
+
+  for (i in seq_along(terms)) {
+    term_counts$pages[i] <- count_hits(terms[i], period_start, period_end)
+    message(terms[i], ": ", term_counts$pages[i], " pages")
+    Sys.sleep(pause_seconds)
+  }
+  write_csv(term_counts, terms_file)
+}
+
+term_counts %>% arrange(desc(pages))
+```
+
+Which spelling did American papers prefer? Note that "Hapsburg" (with a *p*) was the usual American spelling at the time.
+
+
+## 6. Coverage over time
+
+Now count the pages that mention your `main_phrase` (Francis Joseph) in each month from July 1914 to November 1918. That's 53 months, so 53 requests. The API can take half a minute or more to answer each one, so this can take half an hour. The loop **saves the counts after every month**, in `data/matney/monthly-counts.csv`, and only asks for the months that aren't counted yet. If it stops partway, run the chunk again and it picks up where it left off. If you change `main_phrase`, delete that file first.
+
+`seq(..., by = "month")` makes a list of the first day of each month. To get the last day of a month, we take the first day of the *next* month and subtract one day.
+
+```{r}
+#| label: monthly-counts
+
+monthly_file <- file.path(datadir, "monthly-counts.csv")
+
+if (file.exists(monthly_file)) {
+  monthly <- read_csv(monthly_file, show_col_types = FALSE)   # counts saved by an earlier run
+} else {
+  months  <- seq(as.Date("1914-07-01"), as.Date("1918-11-01"), by = "month")
+  monthly <- tibble(month = months, pages = NA_real_)
+}
+
+for (i in which(is.na(monthly$pages))) {   # only the months not counted yet
+  month_start <- monthly$month[i]
+  month_end <- seq(month_start, by = "month", length.out = 2)[2] - 1  # last day of the month
+  monthly$pages[i] <- count_hits(main_phrase, month_start, month_end)
+  message(format(month_start, "%B %Y"), ": ", monthly$pages[i], " pages")
+  write_csv(monthly, monthly_file)         # save after every month, so a crash can't lose it
+  Sys.sleep(pause_seconds)
+}
+```
+
+Now plot it with the key events marked. This chart is the start of the **visual timeline** I suggested in my feedback on your Historical Context.
+
+```{r}
+#| label: timeline-plot
+#| fig-width: 10
+#| fig-height: 5
+
+key_events <- tribble(
+  ~date,        ~label,
+  "1914-06-28", "Sarajevo",
+  "1915-09-08", "Dumba affair",
+  "1915-11-08", "Ancona sunk",
+  "1916-11-21", "Francis Joseph dies",
+  "1917-04-06", "U.S. at war with Germany",
+  "1917-12-07", "U.S. at war with Austria-Hungary",
+  "1918-05-31", "Pittsburgh Agreement"
+) %>%
+  mutate(date = as.Date(date))
+
+ggplot(monthly, aes(x = month, y = pages)) +
+  geom_col(fill = "grey60") +
+  geom_vline(data = key_events, aes(xintercept = date),
+             linetype = "dashed", color = "firebrick") +
+  geom_text(data = key_events, aes(x = date, y = max(monthly$pages), label = label),
+            angle = 90, hjust = 1, vjust = -0.4, size = 3, color = "firebrick") +
+  labs(
+    title = paste0("Newspaper pages mentioning \"", main_phrase, "\", July 1914 to November 1918"),
+    subtitle = "Chronicling America (Library of Congress), exact-phrase search",
+    x = NULL, y = "Pages per month"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+ggsave(file.path(outdir, "timeline.png"), width = 10, height = 5)
+```
+
+::: {.callout-note}
+## Read the chart like a historian
+
+A bar can be tall for two reasons: papers wrote more about the emperor that month, or the Library simply has more digitized pages from that month. Chronicling America is a sample: some states and newspapers are well covered, others barely at all, and many big-city dailies (such as *The New York Times*) are not in it. Section 7 shows you which papers your results come from.
+:::
+
+Observe and think:
+
+1. Which months stand out? Do the peaks line up with the events on the chart?
+2. What happens to coverage after the U.S. declares war on Austria-Hungary in December 1917?
+3. Write two or three sentences about what this chart suggests, and what it can't tell you.
+
+>
+
+## 7. Collect the pages around four key moments
+
+Now we collect the details of each matching page (date, newspaper, place, a link to the page and a link to the image), not just counts. Instead of collecting everything from 1914 to 1918, we'll search narrow windows around four events. Each event gets the phrase most likely to find its coverage.
+
+```{r}
+#| label: event-windows
+
+event_windows <- tribble(
+  ~event, ~phrase, ~start_date, ~end_date,
+  "Dumba affair", "Dumba", "1915-09-01", "1915-09-30",
+  "Sinking of the Ancona", "Ancona", "1915-11-08",  "1915-11-30",
+  "Death of Francis Joseph", "Francis Joseph", "1916-11-21", "1916-12-05",
+  "U.S. declares war on Austria-Hungary",  "Austria-Hungary", "1917-12-04",  "1917-12-15"
+)
+
+event_windows
+```
+
+### Clean up each batch of results
+
+The API returns some fields as **lists**, because a page can belong to more than one category. `collapse_list()` turns each list into a single line of text. `full_size_jpg()` turns the API's small preview image link into the link for the full-resolution scan; it's the same conversion I use in my own script.
+
+```{r}
+#| label: helpers
+
+# Turn list-columns into plain text, e.g. list(c("a", "b")) -> "a; b"
+collapse_list <- function(column) {
+  sapply(column, function(value) paste(value, collapse = "; "), USE.NAMES = FALSE)
+}
+
+# Turn a LoC preview image link into the full-resolution image link.
+# Previews end in something like /full/pct:6.25/0/default.jpg;
+# the full scan ends in /full/full/0/default.jpg
+full_size_jpg <- function(preview_url) {
+  if (is.na(preview_url) || !str_detect(preview_url, "/image-services/iiif/")) {
+    return(NA_character_)
+  }
+  sub("/full/[^/]+/0/default\\.jpg(#.*)?$", "/full/full/0/default.jpg", preview_url)
+}
+```
+
+`tidy_batch()` keeps only the fields we need from one batch of 100 results:
+
+```{r}
+#| label: tidy-batch
+
+tidy_batch <- function(results) {
+  tibble(
+    page_id       = results$page_id,
+    date          = as.Date(results$date),
+    page_title    = results$title,
+    newspaper     = sapply(results$partof_title, function(value) value[1]),
+    state         = collapse_list(results$location_state),
+    snippet       = collapse_list(results$description),
+    preview_image = sapply(results$image_url, function(urls) urls[1]),
+    page_url      = results$url
+  )
+}
+```
+
+### The loop
+
+`get_window()` asks for the results 100 at a time, one page of results per request (`&sp=1`, `&sp=2`, ...), until there are no more. It stops early if it reaches `max_requests` (10 requests, so up to 1,000 pages per event), so a huge search can't run for hours.
+
+**It saves every batch as soon as it arrives**, in `data/matney/batches/` (for example `dumba-affair_1.csv`). If a later run finds a batch already saved, it reads the file instead of asking the API again. So if the loop crashes or your connection drops, you lose at most one request: just run the chunk again, and it picks up where it left off.
+
+```{r}
+#| label: get-window
+
+get_window <- function(event, phrase, start_date, end_date, max_requests = 10) {
+  batch_dir <- file.path(datadir, "batches")
+  dir.create(batch_dir, showWarnings = FALSE)
+  event_slug <- str_replace_all(str_to_lower(event), "[^a-z0-9]+", "-")   # "Dumba affair" -> "dumba-affair"
+
+  for (n in 1:max_requests) {
+    batch_file <- file.path(batch_dir, paste0(event_slug, "_", n, ".csv"))
+
+    if (file.exists(batch_file)) {
+      # this batch was saved by an earlier run: read it instead of asking the API again
+      batch <- read_csv(batch_file, col_types = cols(.default = col_character()))
+      message("  request ", n, ": already saved")
+    } else {
+      url <- paste0(build_search_url(phrase, start_date, end_date), "&sp=", n)   # sp = page of results
+      response <- get_json(url)
+      if (length(response$results) == 0) {
+        batch <- tibble(page_id = character(), date = character(), total_hits = character())  # no results
+      } else {
+        batch <- tidy_batch(response$results) %>%
+          mutate(total_hits = response$search$hits)
+      }
+      # The API sometimes sends a short or empty page in the middle of a search.
+      # Don't save it: stop instead, so the next run asks for this page again.
+      hits <- response$search$hits
+      if (is.null(hits) || (nrow(batch) < 100 && n * 100 < hits)) {
+        stop("Request ", n, " for ", event, " returned only ", nrow(batch), " pages. ",
+             "Run this chunk again to retry it.")
+      }
+      write_csv(batch, batch_file)   # save right away, so a crash can't lose it
+      message("  request ", n, ": saved ", min(n * 100, response$search$hits),
+              " of ", response$search$hits, " pages")
+      Sys.sleep(pause_seconds)
+    }
+
+    total_hits <- as.numeric(batch$total_hits[1])
+    if (nrow(batch) == 0 || n * 100 >= total_hits) break   # that was the last page of results
+  }
+
+  if (nrow(batch) > 0 && n * 100 < total_hits) {
+    message("  Note: this search has ", total_hits, " pages; we only got the first ", n * 100,
+            ". They're sorted by newspaper title, so try a narrower date window.")
+  }
+
+  # put all of this event's saved batches together
+  batch_files <- list.files(batch_dir, pattern = paste0("^", event_slug, "_\\d+\\.csv$"), full.names = TRUE)
+  event_pages <- tibble()
+  for (file in batch_files) {
+    event_pages <- bind_rows(event_pages, read_csv(file, col_types = cols(.default = col_character())))
+  }
+
+  # The API occasionally returns the same page twice; keep one copy of each.
+  event_pages %>%
+    mutate(date = as.Date(date)) %>%
+    distinct(page_id, .keep_all = TRUE)
+}
+```
+
+Now run it for each event. This can take a long time the first time, depending on how fast the Library's API is answering. If it stops partway, run the chunk again: the batches already saved are kept. Once every event is done, the results are combined and saved to `data/matney/pages.csv`, and re-used from then on.
+
+To add or change an event later, edit `event_windows`, then delete `data/matney/pages.csv` (but **not** the `batches/` folder). Only the new event will be fetched. If you change an event's dates or phrase, also delete that event's files in `data/matney/batches/`.
+
+The last step splits the newspaper's full name, such as `The sun (New York [N.Y.]) 1833-1916`, into the title (`The sun`) and the place (`New York [N.Y.]`).
+
+```{r}
+#| label: collect-events
+
+pages_file <- file.path(datadir, "pages.csv")
+
+if (file.exists(pages_file)) {
+  pages <- read_csv(pages_file)
+} else {
+  all_events <- list()
+  for (i in seq_len(nrow(event_windows))) {
+    message(event_windows$event[i], " (\"", event_windows$phrase[i], "\")")
+    event_pages <- get_window(event_windows$event[i],
+                              event_windows$phrase[i],
+                              event_windows$start_date[i],
+                              event_windows$end_date[i])
+    event_pages$event <- event_windows$event[i]
+    all_events[[i]] <- event_pages
+  }
+
+  pages <- bind_rows(all_events) %>%
+    mutate(
+      newspaper_title = str_trim(str_remove(newspaper, "\\s*\\(.*$")),  # text before the parentheses
+      place = str_match(newspaper, "\\(([^)]*)\\)")[, 2],                 # text inside the parentheses
+      place = str_remove(place, ",?\\s*\\d{4}-\\d{4}.*$"),                # drop publication years if inside
+      jpg_url = sapply(preview_image, full_size_jpg, USE.NAMES = FALSE)
+    ) %>%
+    arrange(date) %>%
+    select(event, date, newspaper_title, place, state, page_title,
+           snippet, page_url, jpg_url, page_id)
+
+  write_csv(pages, pages_file)
+}
+
+pages %>% count(event)
+```
+
+## 8. Choose your three articles
+
+Look at the candidates for each event. The `snippet` column shows the text around your search phrase (with OCR errors).
+
+```{r}
+#| label: candidates
+
+pages %>%
+  filter(event == "Death of Francis Joseph") %>%
+  select(date, newspaper_title, place, snippet, page_url) %>%
+  head(15)
+```
+
+Change the `event` in `filter()` to look at the other moments. Open the promising pages in your browser (`page_url`) and **read them**. Choose three pages, ideally from three different moments, and preferably at least one from before and one from after December 1917.
+
+Then paste their `page_id` values below, replacing the `REPLACE-ME` placeholders:
+
+```{r}
+#| label: choose
+
+chosen_ids <- c("REPLACE-ME-1", "REPLACE-ME-2", "REPLACE-ME-3")
+
+chosen <- pages %>% filter(page_id %in% chosen_ids)
+chosen %>% select(event, date, newspaper_title, place, page_url)
+```
+
+### Download the full-resolution images
+
+This only downloads your three chosen pages, with a short pause between them. Each file is named with the date and newspaper, so `1916-11-22_The-sun.jpg`.
+
+```{r}
+#| label: download
+
+if (any(str_detect(chosen_ids, "REPLACE-ME"))) {
+  message("Choose your three pages first: replace the REPLACE-ME placeholders above.")
+} else {
+  for (i in seq_len(nrow(chosen))) {
+    file_name <- file.path(imgdir, paste0(chosen$date[i], "_",
+                           str_replace_all(chosen$newspaper_title[i], "[^A-Za-z0-9]+", "-"),
+                           ".jpg"))
+    if (!file.exists(file_name)) {
+      download.file(chosen$jpg_url[i], file_name, mode = "wb")
+      Sys.sleep(3)
+    }
+    message("Saved ", file_name)
+  }
+}
+```
+
+If a `jpg_url` is empty (`NA`), open that page's `page_url` in your browser and use the download button on the page viewer instead.
+
+## 9. Reading log
+
+A page image is not yet evidence. Fill in this table for each of your three articles. Find the article on the page, read it closely, and record where it is (page and column) so you can cite it.
+
+| | Article 1 | Article 2 | Article 3 |
+|---|---|---|---|
+| Event / moment | | | |
+| Newspaper, city, date, page | | | |
+| Headline | | | |
+| Where on the page (front page? column?) | | | |
+| How is Francis Joseph or Austria-Hungary described? (quote 2–3 key words or phrases) | | | |
+| Who is speaking? (reporter, wire service, official, editorial) | | | |
+| Is Austria-Hungary treated separately from Germany, or lumped together? | | | |
+| What surprised or puzzled you? | | | |
+
+### Citing a newspaper in Chicago style
+
+In a footnote, a newspaper article looks like this:
+
+> 1\. "Headline of the Article," *Newspaper Title* (City, State), Month Day, Year, page number, Chronicling America, Library of Congress, URL.
+
+Use the real headline, the date of the issue, and the `page_url` from your CSV.
+
+## 10. Check your work
+
+Before you use this data in your project:
+
+- [ ] **Row count.** `pages %>% count(event)` should be close to the totals the loop reported for each event. If an event says it has more pages than you got, the search was capped. Narrow its date window and run it again.
+- [ ] **Spot-check the matches.** Pick five rows from each event and open the `page_url`. Is your search phrase really on the page? Is the page really about the event?
+- [ ] **Check the images.** Open your three files in `data/matney/images/`. Are they the pages you meant to download, and can you read the article?
+- [ ] **Commit.** This `.qmd` file, the CSVs in `data/matney/`, and everything in `output/matney/` are committed to GitHub. The images and the batches are not.
+
+## Thinking like a historian about this pipeline
+
+Every step here **shapes what you find**, and your project should say so.
+
+- **The search phrase is a filter.** You only find pages that use your words, spelled the way you spelled them. An article about the "Austrian Emperor" won't show up in a search for "Francis Joseph."
+
+- **OCR is a form of reading.** The text you search is a machine's reading of old, sometimes damaged pages. Misread words make pages invisible to your search, and blurry or crowded pages are misread more often.
+
+- **Chronicling America is a sample, not the American press.** It includes the newspapers that libraries chose and paid to digitize. Some states are heavily represented, others barely, and many major papers are missing. Immigrant newspapers in Czech, Slovak, Hungarian, or German, which might tell a very different story about Austria-Hungary, are only partly covered.
+
+- **Pages are not articles.** A "hit" is a page that contains your phrase somewhere. Counting pages measures how often a phrase appeared in print, not how much attention a story received.
+
+- **Document your method.** In your project, note the phrases you searched, the date windows, the date you ran the searches, and how many results you got. Someone else should be able to reproduce or question your data.
+
+## Exploratory Data Analysis
+
+### Check the packaging
+
+> **Peng:** Before opening the wrapped "present," shake the box: how many rows and columns are there? And do they match what you expected? ([Peng, "Check the packaging"](https://bookdown.org/rdpeng/exdata/exploratory-data-analysis-checklist.html#check-the-packaging))
+
+```{r}
+#| label: eda-packaging
+
+nrow(pages)
+ncol(pages)
+```
+
+### Run `str()`
+
+> **Peng:** `str()` shows the class of every column. Make sure numbers are numbers, dates are dates, and text is text. ([Peng, "Run str()"](https://bookdown.org/rdpeng/exdata/exploratory-data-analysis-checklist.html#run-str))
+
+```{r}
+#| label: eda-str
+
+str(pages)
+```
+
+### Check your "n"s
+
+> **Peng:** Count things, and compare the counts with *landmarks*: numbers you know should be true. If you expect 1,000 people and find 20, something's wrong. ([Peng, "Check your 'n's"](https://bookdown.org/rdpeng/exdata/exploratory-data-analysis-checklist.html#check-your-ns))
+
+Your landmarks here are the totals the API reported for each event in Section 7. Do your counts match them?
+
+```{r}
+#| label: eda-ns
+
+pages %>% count(event)
+
+# How many different newspapers, and from how many states?
+pages %>%
+  group_by(event) %>%
+  summarise(newspapers = n_distinct(newspaper_title),
+            states     = n_distinct(state))
+```
+
+Which newspapers and states contributed the most pages?
+
+```{r}
+#| label: eda-papers
+
+pages %>%
+  count(newspaper_title, place, sort = TRUE) %>%
+  head(15)
+
+pages %>%
+  count(state, sort = TRUE) %>%
+  head(15)
+```
+
+::: {.callout-tip}
+## Your turn
+
+- Which newspapers and states dominate? Whose voices are over-represented, and whose are missing?
+- The search for "Ancona" will also find the Italian city, and "Dumba" may catch OCR errors. Skim the snippets: what share of the results is actually about your events?
+- Pick one paper that appears in several windows. Following one newspaper across the period is a good way to see change over time.
+:::
+
+### A first experiment: which words surround your search phrases?
+
+The `snippet` column holds a few words of text around each match. This is a first, rough look at the language used around each event, using the text-analysis tools from our Voyant and topic-modeling exercises. The snippets are short and full of OCR errors, so treat the results as clues to follow up, not findings.
+
+```{r}
+#| label: eda-words
+
+library(tidytext)
+
+# Every snippet contains the phrase we searched for, so drop those words too
+search_words <- unlist(str_split(str_to_lower(event_windows$phrase), "[ -]"))
+search_words   # "dumba" "ancona" "francis" "joseph" "austria" "hungary"
+
+snippet_words <- pages %>%
+  select(event, snippet) %>%
+  unnest_tokens(word, snippet) %>%
+  anti_join(stop_words, by = "word") %>%
+  filter(!word %in% search_words,
+         !str_detect(word, "\\d"), str_length(word) >= 3)
+
+top_words <- snippet_words %>%
+  count(event, word, sort = TRUE) %>%
+  group_by(event) %>%
+  slice_max(n, n = 10, with_ties = FALSE) %>%
+  ungroup()
+
+top_words %>%
+  mutate(word = reorder_within(word, n, event)) %>%
+  ggplot(aes(x = n, y = word)) +
+  geom_col(fill = "grey40") +
+  scale_y_reordered() +
+  facet_wrap(~ event, scales = "free_y", ncol = 2) +
+  labs(title = "Most frequent words in the snippets around each event",
+       x = "Number of times the word appears", y = NULL)
+```
+
+::: {.callout-tip}
+## Your turn
+
+Do the words around Austria-Hungary change between the Dumba affair (1915) and the declaration of war (December 1917)? Which words would you want to search for next? Write down two or three ideas. They're the start of your Method Selection assignment.
+:::
