@@ -17,9 +17,10 @@ data/cole/pages/
 data/huneryager/catalogs/
 data/huneryager/dailynews/
 data/huneryager/catalog-lines.csv
-# Matney: page images and raw API batches
+# Matney: page images, raw API batches, and the full text of sampled pages
 data/matney/images/
 data/matney/batches/
+data/matney/fulltext/
 # Rojas: IPUMS can't be redistributed
 data/rojas/ipums/
 # Tan: private notes

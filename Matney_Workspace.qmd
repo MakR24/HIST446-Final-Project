@@ -19,8 +19,9 @@ Alex,
 Your research question asks how American newspapers portrayed the Habsburgs between 1914 and 1918, and whether that portrayal changed once the United States went to war with Austria-Hungary. In this workspace, you will search **Chronicling America**, the Library of Congress's collection of digitized newspapers, and turn the results into sources and data you can analyze. By the time you push this back to GitHub, you will have:
 
 1. **A timeline chart** of how often "Francis Joseph" appears in American newspapers each month from 1914 to 1918, with the key events of your period marked on it.
-2. **A dataset (CSV) of newspaper pages** that mention Austria-Hungary around four key moments, with each page's date, newspaper, place, and links to the page and its image.
-3. **Three full-resolution page images**, chosen by you, ready for close reading, and a **reading log** for each.
+2. **A dataset (CSV) of newspaper pages** that mention Austria-Hungary around five key moments, with each page's date, newspaper, place, and links to the page and its image.
+3. **The text around your search phrase** on a sample of those pages, ready for word counts.
+4. **Three full-resolution page images**, chosen by you, ready for close reading, and a **reading log** for each.
 
 The steps below adapt the script I use to collect newspaper pages about world's fairs for my own research. Read the explanation before you run each chunk. The steps run in order, so each chunk needs the ones before it.
 
@@ -62,6 +63,7 @@ HIST446-Final-Project/
 │   └── matney/                         ← your datasets: sources, and everything made from them
 │       ├── images/                     ← your newspaper page images (created automatically)
 │       ├── batches/                    ← the raw results from the API (created automatically)
+│       ├── fulltext/                   ← the full text of your sampled pages (created automatically)
 │       └── *.csv                       ← your counts and your pages dataset (created automatically)
 └── output/
     └── matney/                         ← your charts, maps and writing (created automatically)
@@ -69,7 +71,7 @@ HIST446-Final-Project/
 
 ### What stays off GitHub
 
-Full-resolution newspaper scans are large (often several MB each), and the `batches/` folder holds the raw batches from Section 7, which end up combined in `pages.csv`. The `.gitignore` already keeps `data/matney/images/` and `data/matney/batches/` off GitHub. Remember not to edit the `.gitignore` (the `README.md` explains why).
+Full-resolution newspaper scans are large (often several MB each), the `batches/` folder holds the raw batches from Section 7, which end up combined in `pages.csv`, and the `fulltext/` folder holds one text file per sampled page from Section 8, which end up in `passages.csv`. The `.gitignore` keeps `data/matney/images/`, `data/matney/batches/` and `data/matney/fulltext/` off GitHub. Remember not to edit the `.gitignore` (the `README.md` explains why).
 
 ### What to commit
 
@@ -352,9 +354,9 @@ Observe and think:
 
 >
 
-## 7. Collect the pages around four key moments
+## 7. Collect the pages around five key moments
 
-Now we collect the details of each matching page (date, newspaper, place, a link to the page and a link to the image), not just counts. Instead of collecting everything from 1914 to 1918, we'll search narrow windows around four events. Each event gets the phrase most likely to find its coverage.
+Now we collect the details of each matching page (date, newspaper, place, a link to the page and a link to the image), not just counts. Instead of collecting everything from 1914 to 1918, we'll search narrow windows around five events. Each event gets the phrase most likely to find its coverage.
 
 ```{r}
 #| label: event-windows
@@ -364,11 +366,14 @@ event_windows <- tribble(
   "Dumba affair", "Dumba", "1915-09-01", "1915-09-30",
   "Sinking of the Ancona", "Ancona", "1915-11-08",  "1915-11-30",
   "Death of Francis Joseph", "Francis Joseph", "1916-11-21", "1916-12-05",
+  "U.S. declares war on Germany", "Austria-Hungary", "1917-04-06", "1917-04-15",
   "U.S. declares war on Austria-Hungary",  "Austria-Hungary", "1917-12-04",  "1917-12-15"
 )
 
 event_windows
 ```
+
+The April 1917 window is the start of your eight-month gap: the U.S. went to war with Germany on April 6, and Austria-Hungary broke off relations two days later. Comparing it with December 1917 shows how papers wrote about Austria-Hungary before and after it became an enemy.
 
 ### Clean up each batch of results
 
@@ -480,7 +485,7 @@ get_window <- function(event, phrase, start_date, end_date, max_requests = 10) {
 
 Now run it for each event. This can take a long time the first time, depending on how fast the Library's API is answering. If it stops partway, run the chunk again: the batches already saved are kept. Once every event is done, the results are combined and saved to `data/matney/pages.csv`, and re-used from then on.
 
-To add or change an event later, edit `event_windows`, then delete `data/matney/pages.csv` (but **not** the `batches/` folder). Only the new event will be fetched. If you change an event's dates or phrase, also delete that event's files in `data/matney/batches/`.
+If `data/matney/pages.csv` already exists, the chunk reads it and fetches **only the events that aren't in it yet**, then saves it again. So to add an event later, just add a row to `event_windows` and run the chunk. To change an event's dates or phrase, delete `pages.csv` and that event's files in `data/matney/batches/`, then run it again.
 
 The last step splits the newspaper's full name, such as `The sun (New York [N.Y.]) 1833-1916`, into the title (`The sun`) and the place (`New York [N.Y.]`).
 
@@ -490,46 +495,158 @@ The last step splits the newspaper's full name, such as `The sun (New York [N.Y.
 pages_file <- file.path(datadir, "pages.csv")
 
 if (file.exists(pages_file)) {
-  pages <- read_csv(pages_file)
+  pages <- read_csv(pages_file, show_col_types = FALSE)   # events collected by an earlier run
 } else {
-  all_events <- list()
-  for (i in seq_len(nrow(event_windows))) {
-    message(event_windows$event[i], " (\"", event_windows$phrase[i], "\")")
-    event_pages <- get_window(event_windows$event[i],
-                              event_windows$phrase[i],
-                              event_windows$start_date[i],
-                              event_windows$end_date[i])
-    event_pages$event <- event_windows$event[i]
-    all_events[[i]] <- event_pages
-  }
+  pages <- tibble()
+}
 
-  pages <- bind_rows(all_events) %>%
+new_events <- event_windows %>% filter(!(event %in% pages$event))   # events not collected yet
+
+for (i in seq_len(nrow(new_events))) {
+  message(new_events$event[i], " (\"", new_events$phrase[i], "\")")
+  event_pages <- get_window(new_events$event[i],
+                            new_events$phrase[i],
+                            new_events$start_date[i],
+                            new_events$end_date[i])
+
+  event_pages <- event_pages %>%
     mutate(
+      event = new_events$event[i],
       newspaper_title = str_trim(str_remove(newspaper, "\\s*\\(.*$")),  # text before the parentheses
       place = str_match(newspaper, "\\(([^)]*)\\)")[, 2],                 # text inside the parentheses
       place = str_remove(place, ",?\\s*\\d{4}-\\d{4}.*$"),                # drop publication years if inside
       jpg_url = sapply(preview_image, full_size_jpg, USE.NAMES = FALSE)
     ) %>%
-    arrange(date) %>%
     select(event, date, newspaper_title, place, state, page_title,
            snippet, page_url, jpg_url, page_id)
 
-  write_csv(pages, pages_file)
+  pages <- bind_rows(pages, event_pages) %>% arrange(date)
+  write_csv(pages, pages_file)   # save after each event
 }
 
 pages %>% count(event)
 ```
 
-## 8. Choose your three articles
+## 8. Read the text around your search phrase
 
-Look at the candidates for each event. The `snippet` column shows the text around your search phrase (with OCR errors).
+The `snippet` column is **not** the text around your search phrase. It's the first 200 words or so of the page, often the newspaper's masthead ("THE WEATHER Fair Friday..."). On the September 1915 pages, only about one snippet in ten even contains the word "Dumba." So the snippets can't tell you how papers wrote about Austria-Hungary.
+
+The Library of Congress also serves the **full text** of every page (the same OCR the search uses). Its address can be built from the page's image link, `jpg_url`: the image service and the text service use the same path to the page.
+
+`fulltext_url()` turns an image link into a text link:
+
+```{r}
+#| label: fulltext-url
+
+fulltext_url <- function(jpg_url) {
+  segment <- jpg_url %>%
+    str_remove("^https://tile\\.loc\\.gov/image-services/iiif/") %>%   # keep only the page's path...
+    str_remove("/full/full/0/default\\.jpg$") %>%
+    str_replace_all(":", "/")                                          # ...written with slashes
+  paste0("https://tile.loc.gov/text-services/word-coordinates-service?segment=/",
+         segment, ".xml&format=alto_xml&full_text=1")
+}
+
+fulltext_url(pages$jpg_url[1])   # open this in your browser to see what comes back
+```
+
+### Download the text of a sample of pages
+
+You don't need the text of all 3,000+ pages. A sample of `pages_per_event` pages from each event is enough to compare how the events were written about, and it keeps the number of requests small. `set.seed()` makes the sample the same every time you run it.
+
+Like the batches in Section 7, **each page's text is saved as soon as it arrives**, in `data/matney/fulltext/`, and pages already saved are skipped. If the loop stops, run it again.
+
+```{r}
+#| label: download-fulltext
+
+pages_per_event <- 40   # 5 events x 40 pages = 200 requests, about 20 minutes
+
+fulltext_dir <- file.path(datadir, "fulltext")
+dir.create(fulltext_dir, showWarnings = FALSE)
+
+set.seed(446)
+sampled_pages <- pages %>%
+  filter(!is.na(jpg_url)) %>%
+  group_by(event) %>%
+  slice_sample(n = pages_per_event) %>%
+  ungroup()
+
+for (i in seq_len(nrow(sampled_pages))) {
+  text_file <- file.path(fulltext_dir, paste0(sampled_pages$page_id[i], ".txt"))
+  if (!file.exists(text_file)) {
+    response  <- get_json(fulltext_url(sampled_pages$jpg_url[i]))
+    page_text <- response[[1]]$full_text   # the answer has one entry: the page's text
+    if (is.null(page_text)) page_text <- ""   # a page with no text gets an empty file
+    write_file(page_text, text_file)
+    message(i, " of ", nrow(sampled_pages), ": saved ", sampled_pages$page_id[i])
+    Sys.sleep(pause_seconds)
+  }
+}
+```
+
+### Cut out the passages around your phrase
+
+Now read each saved page and keep only the text around the event's search phrase: `window_chars` characters before and after each time it appears, about 40 words on each side. (The passages may start and end in the middle of a word.)
+
+OCR breaks words at the ends of lines ("Aus-" at the end of one line, "tria" at the start of the next), so we join those first. That can also glue "Austria-" and "Hungary" into "AustriaHungary," so the pattern accepts a hyphen, a space, or nothing between the two words.
+
+```{r}
+#| label: passages
+
+window_chars <- 250   # characters to keep on each side of the phrase (about 40 words)
+
+passages <- tibble()
+
+for (i in seq_len(nrow(sampled_pages))) {
+  text_file <- file.path(fulltext_dir, paste0(sampled_pages$page_id[i], ".txt"))
+  if (!file.exists(text_file)) next
+
+  text <- read_file(text_file) %>%
+    str_replace_all("-\\s*\\n\\s*", "") %>%   # join words split at the end of a line
+    str_squish()                               # line breaks and extra spaces become single spaces
+
+  phrase <- event_windows$phrase[event_windows$event == sampled_pages$event[i]]
+  phrase <- str_replace_all(phrase, "[- ]", "[-\\\\s]?")   # "Austria-Hungary" also matches "Austria Hungary" and "AustriaHungary"
+  matches <- str_locate_all(text, regex(phrase, ignore_case = TRUE))[[1]]   # where the phrase starts and ends
+
+  for (m in seq_len(nrow(matches))) {
+    from <- max(1, matches[m, "start"] - window_chars)
+    to   <- min(str_length(text), matches[m, "end"] + window_chars)
+    passages <- bind_rows(passages, tibble(
+      event = sampled_pages$event[i],
+      date = sampled_pages$date[i],
+      newspaper_title = sampled_pages$newspaper_title[i],
+      state = sampled_pages$state[i],
+      page_id = sampled_pages$page_id[i],
+      page_url = sampled_pages$page_url[i],
+      passage = str_sub(text, from, to)
+    ))
+  }
+}
+
+write_csv(passages, file.path(datadir, "passages.csv"))
+
+# how many sampled pages had the phrase in their text?
+sampled_pages %>%
+  count(event, name = "pages_sampled") %>%
+  left_join(passages %>%
+              group_by(event) %>%
+              summarise(pages_with_phrase = n_distinct(page_id), passages = n()),
+            by = "event")
+```
+
+If an event has far fewer `pages_with_phrase` than pages sampled, the OCR may have broken the phrase ("Austria- Hungary," "Francis Jo seph"), or the search matched a different spelling. Open one of those pages and look.
+
+## 9. Choose your three articles
+
+Look at the candidates for each event. The `passage` column shows the text around your search phrase, from Section 8 (with OCR errors).
 
 ```{r}
 #| label: candidates
 
-pages %>%
+passages %>%
   filter(event == "Death of Francis Joseph") %>%
-  select(date, newspaper_title, place, snippet, page_url) %>%
+  select(date, newspaper_title, passage, page_id, page_url) %>%
   head(15)
 ```
 
@@ -571,7 +688,7 @@ if (any(str_detect(chosen_ids, "REPLACE-ME"))) {
 
 If a `jpg_url` is empty (`NA`), open that page's `page_url` in your browser and use the download button on the page viewer instead.
 
-## 9. Reading log
+## 10. Reading log
 
 A page image is not yet evidence. Fill in this table for each of your three articles. Find the article on the page, read it closely, and record where it is (page and column) so you can cite it.
 
@@ -594,14 +711,15 @@ In a footnote, a newspaper article looks like this:
 
 Use the real headline, the date of the issue, and the `page_url` from your CSV.
 
-## 10. Check your work
+## 11. Check your work
 
 Before you use this data in your project:
 
 - [ ] **Row count.** `pages %>% count(event)` should be close to the totals the loop reported for each event. If an event says it has more pages than you got, the search was capped. Narrow its date window and run it again.
 - [ ] **Spot-check the matches.** Pick five rows from each event and open the `page_url`. Is your search phrase really on the page? Is the page really about the event?
 - [ ] **Check the images.** Open your three files in `data/matney/images/`. Are they the pages you meant to download, and can you read the article?
-- [ ] **Commit.** This `.qmd` file, the CSVs in `data/matney/`, and everything in `output/matney/` are committed to GitHub. The images and the batches are not.
+- [ ] **Read the passages.** For each event, read ten passages. Are they about your event, or about something else that uses the same word (the Italian city of Ancona, for example)?
+- [ ] **Commit.** This `.qmd` file, the CSVs in `data/matney/`, and everything in `output/matney/` are committed to GitHub. The images, the batches and the full text are not.
 
 ## Thinking like a historian about this pipeline
 
@@ -676,31 +794,31 @@ pages %>%
 ## Your turn
 
 - Which newspapers and states dominate? Whose voices are over-represented, and whose are missing?
-- The search for "Ancona" will also find the Italian city, and "Dumba" may catch OCR errors. Skim the snippets: what share of the results is actually about your events?
+- The search for "Ancona" will also find the Italian city, and "Dumba" may catch OCR errors. Skim the passages from Section 8: what share of them is actually about your events?
 - Pick one paper that appears in several windows. Following one newspaper across the period is a good way to see change over time.
 :::
 
 ### A first experiment: which words surround your search phrases?
 
-The `snippet` column holds a few words of text around each match. This is a first, rough look at the language used around each event, using the text-analysis tools from our Voyant and topic-modeling exercises. The snippets are short and full of OCR errors, so treat the results as clues to follow up, not findings.
+The passages from Section 8 hold the words around each match. This is a first, rough look at the language used around each event, using the text-analysis tools from our Voyant and topic-modeling exercises. The passages are short and full of OCR errors, and they come from a sample of pages, so treat the results as clues to follow up, not findings.
 
 ```{r}
 #| label: eda-words
 
 library(tidytext)
 
-# Every snippet contains the phrase we searched for, so drop those words too
+# Every passage contains the phrase we searched for, so drop those words too
 search_words <- unlist(str_split(str_to_lower(event_windows$phrase), "[ -]"))
 search_words   # "dumba" "ancona" "francis" "joseph" "austria" "hungary"
 
-snippet_words <- pages %>%
-  select(event, snippet) %>%
-  unnest_tokens(word, snippet) %>%
+passage_words <- passages %>%
+  select(event, passage) %>%
+  unnest_tokens(word, passage) %>%
   anti_join(stop_words, by = "word") %>%
   filter(!word %in% search_words,
          !str_detect(word, "\\d"), str_length(word) >= 3)
 
-top_words <- snippet_words %>%
+top_words <- passage_words %>%
   count(event, word, sort = TRUE) %>%
   group_by(event) %>%
   slice_max(n, n = 10, with_ties = FALSE) %>%
@@ -712,12 +830,32 @@ top_words %>%
   geom_col(fill = "grey40") +
   scale_y_reordered() +
   facet_wrap(~ event, scales = "free_y", ncol = 2) +
-  labs(title = "Most frequent words in the snippets around each event",
+  labs(title = "Most frequent words in the passages around each event",
        x = "Number of times the word appears", y = NULL)
 ```
 
 ::: {.callout-tip}
 ## Your turn
 
-Do the words around Austria-Hungary change between the Dumba affair (1915) and the declaration of war (December 1917)? Which words would you want to search for next? Write down two or three ideas. They're the start of your Method Selection assignment.
+Do the words around Austria-Hungary change between the Dumba affair (1915) and the declaration of war (December 1917)? Which words would you want to search for next? Write down two or three ideas.
 :::
+
+### A second experiment: Austria-Hungary alone, or with Germany?
+
+Your reading log asks whether a paper treats Austria-Hungary separately from Germany or lumps them together. Here is a rough count: the share of each event's passages that also mention Germany. Compare April 1917 with December 1917.
+
+```{r}
+#| label: eda-germany
+
+germany_words <- "german|kaiser|berlin"
+
+passages %>%
+  mutate(event = factor(event, levels = event_windows$event),   # keep the events in date order
+         mentions_germany = str_detect(passage, regex(germany_words, ignore_case = TRUE))) %>%
+  group_by(event) %>%
+  summarise(passages = n(),
+            with_germany = sum(mentions_germany),
+            percent = round(100 * with_germany / passages, 1))
+```
+
+A passage that mentions both countries doesn't always lump them together: it may contrast them. Read five passages from April and five from December before you trust the numbers.
